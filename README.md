@@ -1,0 +1,2 @@
+# SomeBot
+Maker for cash
