@@ -1,3 +1,5 @@
+mod local_tokens;
+
 use std::env;
 use tonic::{transport::{Channel, ClientTlsConfig}};
 use futures::{TryStreamExt};
@@ -83,13 +85,8 @@ async fn test_example_sandbox(token: &str) -> TIResult<()> {
 
 #[tokio::main]
 async fn main() -> TIResult<()> {
-    // PREPARE ENV
-    env::set_var("PROD_TOKEN", "???");
-    env::set_var("SANDBOX_TOKEN", "???");
-    // PREPARE ENV
+    let (prod_token, sandbox_token) = local_tokens::get_local_tokens();
 
-    let prod_token = env::var("PROD_TOKEN").unwrap();
-    let sandbox_token = env::var("SANDBOX_TOKEN").unwrap();
     // test_example_prod(&prod_token).await.expect("TODO: panic message");
     test_example_sandbox(&sandbox_token).await.expect("TODO: panic message");
 

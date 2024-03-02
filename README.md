@@ -1,2 +1,5 @@
 # SomeBot
-Maker for cash
+
+## Usage
+
+Set tokens in `local_token.rs`, then `cargo run`
