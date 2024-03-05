@@ -16,8 +16,8 @@ impl State<LastPrice> for LastPriceState {
             state_by_instrument_uid: HashMap::new(),
         }
     }
-    fn update(&mut self, last_price: LastPrice) -> Result<(), &'static str> {
-        self.state_by_instrument_uid.insert(last_price.instrument_uid.clone(), last_price);
+    fn update(&mut self, last_price: &LastPrice) -> Result<(), Box<dyn std::error::Error>> {
+        self.state_by_instrument_uid.insert(last_price.instrument_uid.clone(), last_price.clone());
         Ok(())
     }
 }
