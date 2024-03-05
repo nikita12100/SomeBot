@@ -8,9 +8,11 @@ edition = "2021"
 [dependencies]
 error-chain = "0.12.4"
 reqwest = "0.11.24"
-tokio = { version = "1.0.0", features = ["rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.0.0", features = ["rt", "time", "rt-multi-thread", "macros"] }
 tinkoff-invest-api = { version = "0.2.3" }
 futures = "0.3.30"
 futures-util = "0.3.30"
 flume = "0.11.0"
 tonic = { version = "0.8.3",features = ["tls", "tls-roots", "gzip"] }
+prost = {version = "0.11"}
+prost-types = {version = "0.11"}
