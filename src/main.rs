@@ -4,7 +4,8 @@ mod state;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use error_chain::ExitCode;
-use tonic::{Streaming, transport::{Channel, ClientTlsConfig}};
+use flume::Receiver;
+use tonic::{Response, Streaming, transport::{Channel, ClientTlsConfig}};
 use futures::{TryStreamExt};
 use futures_util::{FutureExt};
 use prost_types::Timestamp;
@@ -14,12 +15,14 @@ use tinkoff_invest_api::{tcs::{
     SubscriptionInterval,
 }, TIResult, TinkoffInvestService, DefaultInterceptor};
 use tinkoff_invest_api::tcs::market_data_stream_service_client::MarketDataStreamServiceClient;
-use tinkoff_invest_api::tcs::{FindInstrumentRequest, FindInstrumentResponse, InstrumentIdType, InstrumentRequest, InstrumentsRequest, InstrumentStatus, InstrumentType, LastPriceInstrument, market_data_request, MarketDataResponse, Share, ShareResponse, SharesResponse, SubscribeLastPriceRequest};
+use tinkoff_invest_api::tcs::{FindInstrumentRequest, FindInstrumentResponse, InstrumentIdType, InstrumentRequest, InstrumentsRequest, InstrumentStatus, InstrumentType, LastPriceInstrument, market_data_request, MarketDataRequest, MarketDataResponse, Share, ShareResponse, SharesResponse, SubscribeLastPriceRequest};
 use tinkoff_invest_api::tcs::instruments_service_client::InstrumentsServiceClient;
 use tokio::{task, time};
+use tokio::sync::RwLock;
 use tonic::codegen::InterceptedService;
-use crate::state::run_last_price_state;
+use crate::state::{run_handling_messages};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
+use crate::state::state::State;
 
 struct TimeRange {
     start: Option<Timestamp>,
@@ -59,43 +62,6 @@ fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInst
     }).collect()
 }
 
-// fixme remove old example, use state
-async fn state_reader(service: &TinkoffInvestService, shares: Vec<Share>) -> TIResult<()> {
-    let channel = prepare_channel(false).await?;
-    let mut marketdata_stream = service.marketdata_stream(channel).await?;
-    let (tx, rx) = flume::unbounded();
-
-    // let request = tinkoff_invest_api::tcs::MarketDataRequest {
-    //     payload: Some(Payload::SubscribeCandlesRequest(SubscribeCandlesRequest {
-    //         subscription_action: SubscriptionAction::Subscribe as i32,
-    //         instruments: map_to_candle_subscribe_request(&shares),
-    //         waiting_close: true,
-    //     })),
-    // };
-    let request = tinkoff_invest_api::tcs::MarketDataRequest {
-        payload: Some(Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
-            subscription_action: SubscriptionAction::Subscribe as i32,
-            instruments: map_to_last_price_subscribe_request(&shares),
-        })),
-    };
-
-    tx.send(request).unwrap();
-
-    let response = marketdata_stream
-        .market_data_stream(rx.into_stream())
-        .await?;
-
-    let mut streaming = response.into_inner();
-
-    loop {
-        if let Some(next_message) = streaming.message().await? {
-            println!("MarketData {:?}", next_message);
-        }
-    }
-
-    Ok(())
-}
-
 async fn prepare_instruments(service: &TinkoffInvestService, tickers: Vec<&str>) -> Vec<Share> {
     let channel = prepare_channel(false).await.unwrap();
     let mut instrument_service_client = service.instruments(channel.clone()).await.unwrap();
@@ -116,15 +82,35 @@ async fn main() -> TIResult<()> {
     let instruments = prepare_instruments(&service, tickers).await;
     println!("{:?}", instruments);
 
-    // let last_price_state = run_last_price_state(&service, instruments.clone()).await.expect("TODO: panic message");
-    run_last_price_state(&service, instruments.clone()).await.expect("TODO: panic message");
+    // prepare streaming. todo move it
 
-    // loop {
-    //     let state = last_price_state.lock().unwrap();
-    //     println!("Now price: {:?}", state.get_last_price(&instruments.get(0).unwrap().uid));
-    //     drop(state);
-    //     time::sleep(Duration::from_millis(2000)).await;
-    // }
+    let channel = prepare_channel(false).await.unwrap();
+    let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
+    let (tx, rx) = flume::unbounded();
+
+    let request = tinkoff_invest_api::tcs::MarketDataRequest {
+        payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
+            subscription_action: SubscriptionAction::Subscribe as i32,
+            instruments: map_to_last_price_subscribe_request(&instruments),
+        })),
+    };
+    tx.send(request).unwrap();
+
+    let response = marketdata_stream
+        .market_data_stream(rx.into_stream())
+        .await.unwrap();
+
+    let mut streaming = response.into_inner();
+
+    // prepare streaming
+
+    let last_price_state = Arc::new(LastPriceState::new());
+    let _ = run_handling_messages(streaming, Arc::clone(&last_price_state)).await;
+
+    loop {
+        println!("Now price: {:?}", last_price_state.get_last_price(&instruments.get(0).unwrap().uid).await);
+        time::sleep(Duration::from_millis(2000)).await;
+    }
 
     Ok(())
 }

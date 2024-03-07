@@ -1,29 +1,32 @@
 use std::collections::HashMap;
+use std::sync::RwLock;
 use tinkoff_invest_api::tcs::{LastPrice, Quotation};
 use crate::state::state::State;
 
 pub struct LastPriceState {
-    state_by_instrument_uid: HashMap<String, LastPrice>,
+    state_by_instrument_uid: RwLock<HashMap<String, LastPrice>>,
 }
 
 pub trait LastPriceStateStatistic {
-    fn get_last_price(&self, instrument_uid: &String) -> Option<Quotation>;
+    async fn get_last_price(&self, instrument_uid: &String) -> Option<Quotation>;
 }
 
 impl State<LastPrice> for LastPriceState {
     fn new() -> Self {
         LastPriceState {
-            state_by_instrument_uid: HashMap::new(),
+            state_by_instrument_uid: RwLock::new(HashMap::new()),
         }
     }
-    fn update(&mut self, last_price: &LastPrice) -> Result<(), Box<dyn std::error::Error>> {
-        self.state_by_instrument_uid.insert(last_price.instrument_uid.clone(), last_price.clone());
+    fn update(&self, last_price: &LastPrice) -> Result<(), Box<dyn std::error::Error>> {
+        let mut state = self.state_by_instrument_uid.write().unwrap();
+        state.insert(last_price.instrument_uid.clone(), last_price.clone());
         Ok(())
     }
 }
 
 impl LastPriceStateStatistic for LastPriceState {
-    fn get_last_price(&self, instrument_uid: &String) -> Option<Quotation> {
-        self.state_by_instrument_uid.get(instrument_uid).map(|value| value.price.clone()).flatten()
+    async fn get_last_price(&self, instrument_uid: &String) -> Option<Quotation> {
+        let state = self.state_by_instrument_uid.read().unwrap();
+        state.get(instrument_uid).map(|value| value.price.clone()).flatten()
     }
 }
