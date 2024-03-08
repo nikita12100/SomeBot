@@ -4,7 +4,7 @@ mod state;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use error_chain::ExitCode;
-use flume::Receiver;
+use flume::{Receiver, Sender};
 use tonic::{Response, Streaming, transport::{Channel, ClientTlsConfig}};
 use futures::{TryStreamExt};
 use futures_util::{FutureExt};
@@ -78,39 +78,19 @@ async fn main() -> TIResult<()> {
     let tickers = vec!["SBER", "TCSG"];
 
     let service = TinkoffInvestService::new(sandbox_token.parse().unwrap());
-
     let instruments = prepare_instruments(&service, tickers).await;
-    println!("{:?}", instruments);
-
-    // prepare streaming. todo move it
-
-    let channel = prepare_channel(false).await.unwrap();
-    let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
-    let (tx, rx) = flume::unbounded();
-
-    let request = tinkoff_invest_api::tcs::MarketDataRequest {
-        payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
-            subscription_action: SubscriptionAction::Subscribe as i32,
-            instruments: map_to_last_price_subscribe_request(&instruments),
-        })),
-    };
-    tx.send(request).unwrap();
-
-    let response = marketdata_stream
-        .market_data_stream(rx.into_stream())
-        .await.unwrap();
-
-    let mut streaming = response.into_inner();
-
-    // prepare streaming
 
     let last_price_state = Arc::new(LastPriceState::new());
-    let _ = run_handling_messages(streaming, Arc::clone(&last_price_state)).await;
+    let (tx, _) = run_handling_messages(service, instruments.clone(), Arc::clone(&last_price_state)).await;
 
+    some_analysis(last_price_state, instruments.clone()).await;
+
+    Ok(())
+}
+
+async fn some_analysis(last_price_state: Arc<LastPriceState>, instruments: Vec<Share>) {
     loop {
         println!("Now price: {:?}", last_price_state.get_last_price(&instruments.get(0).unwrap().uid).await);
         time::sleep(Duration::from_millis(2000)).await;
     }
-
-    Ok(())
 }
