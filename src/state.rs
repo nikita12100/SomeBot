@@ -1,27 +1,71 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use flume::Sender;
-use tinkoff_invest_api::tcs::{market_data_request, MarketDataRequest, MarketDataResponse};
+use tinkoff_invest_api::tcs::{CandleInstrument, LastPriceInstrument, market_data_request, MarketDataRequest, MarketDataResponse, SubscribeCandlesRequest, SubscriptionInterval};
 use tinkoff_invest_api::tcs::market_data_response;
-use tinkoff_invest_api::tcs::{LastPrice, Share, SubscribeLastPriceRequest, SubscriptionAction};
-use tinkoff_invest_api::{TIError, TinkoffInvestService, TIResult};
+use tinkoff_invest_api::tcs::{Share, SubscribeLastPriceRequest, SubscriptionAction};
+use tinkoff_invest_api::TinkoffInvestService;
 use tokio::{task, time};
 use tokio::task::JoinHandle;
 use tonic::{Response, Streaming};
-use tonic::transport::Channel;
-use crate::{map_to_last_price_subscribe_request, prepare_channel};
-use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
+use crate::{prepare_channel};
+use crate::state::candle_state::CandleState;
+use crate::state::last_price_state::LastPriceState;
 use crate::state::state::State;
 
 pub mod state;
 pub mod last_price_state;
-mod candle_state;
+pub mod candle_state;
 
-async fn prepare_stream_md_last_price(service: TinkoffInvestService, instruments: Vec<Share>) -> (Sender<MarketDataRequest>, Streaming<MarketDataResponse>) {
+fn map_to_candle_subscribe_request(shares: &Vec<Share>) -> Vec<CandleInstrument> {
+    let mut res = Vec::new();
+    shares.iter().for_each(|share| {
+        res.push(CandleInstrument {
+            figi: share.figi.to_string(),
+            interval: SubscriptionInterval::OneMinute as i32,
+            instrument_id: share.uid.to_string(),
+        });
+        res.push(CandleInstrument {
+            figi: share.figi.to_string(),
+            interval: SubscriptionInterval::FiveMinutes as i32,
+            instrument_id: share.uid.to_string(),
+        });
+    });
+    res
+}
+
+fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInstrument> {
+    shares.iter().map(|share| {
+        LastPriceInstrument {
+            figi: share.figi.to_string(),
+            instrument_id: share.uid.to_string(),
+        }
+    }).collect()
+}
+
+async fn prepare_stream_md_last_price(service: &TinkoffInvestService, instruments: Vec<Share>) -> (Sender<MarketDataRequest>, Streaming<MarketDataResponse>) {
     let channel = prepare_channel(false).await.unwrap();
     let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
     let (tx, rx) = flume::unbounded();
-    let request = tinkoff_invest_api::tcs::MarketDataRequest {
+    let request = MarketDataRequest {
+        payload: Some(market_data_request::Payload::SubscribeCandlesRequest(SubscribeCandlesRequest {
+            subscription_action: SubscriptionAction::Subscribe as i32,
+            instruments: map_to_candle_subscribe_request(&instruments),
+            waiting_close: true,
+        })),
+    };
+    tx.send(request).unwrap();
+    let response: Response<Streaming<MarketDataResponse>> = marketdata_stream
+        .market_data_stream(rx.into_stream())
+        .await.unwrap();
+    (tx, response.into_inner())
+}
+
+async fn prepare_stream_md_candle(service: &TinkoffInvestService, instruments: Vec<Share>) -> (Sender<MarketDataRequest>, Streaming<MarketDataResponse>) {
+    let channel = prepare_channel(false).await.unwrap();
+    let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
+    let (tx, rx) = flume::unbounded();
+    let request = MarketDataRequest {
         payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
             subscription_action: SubscriptionAction::Subscribe as i32,
             instruments: map_to_last_price_subscribe_request(&instruments),
@@ -34,25 +78,58 @@ async fn prepare_stream_md_last_price(service: TinkoffInvestService, instruments
     (tx, response.into_inner())
 }
 
-pub async fn run_handling_messages(service: TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
+pub async fn run_handling_messages(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
     let (tx, mut streaming) = prepare_stream_md_last_price(service, instruments.clone()).await;
 
     let updater = task::spawn(async move {
         loop {
-            if let Some(next_message) = streaming.message().await.unwrap() {
-                let payload = next_message.payload.clone().unwrap();
-                match payload {
-                    market_data_response::Payload::LastPrice(last_price) => {
-                        state.update(&last_price)
-                            .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
-                    }
-                    _ => {
-                        println!("MarketData unknown message payload: {:?}", next_message);
+            match streaming.message().await.unwrap() {
+                Some(next_message) => {
+                    let payload = next_message.payload.clone().unwrap();
+                    match payload {
+                        market_data_response::Payload::LastPrice(last_price) => {
+                            state.update(&last_price)
+                                .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
+                        }
+                        _ => {
+                            println!("MarketData unknown message payload: {:?}", next_message);
+                        }
                     }
                 }
-            } else {
-                println!("fail parse streaming message");
-                time::sleep(Duration::from_millis(1000)).await;
+                _ => {
+                    println!("fail parse streaming message");
+                    time::sleep(Duration::from_millis(1000)).await;
+                }
+            }
+        }
+    }
+    );
+
+    (tx, updater)
+}
+
+pub async fn run_handling_messages_candles(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<CandleState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
+    let (tx, mut streaming) = prepare_stream_md_candle(service, instruments.clone()).await;
+
+    let updater = task::spawn(async move {
+        loop {
+            match streaming.message().await.unwrap() {
+                Some(next_message) => {
+                    let payload = next_message.payload.clone().unwrap();
+                    match payload {
+                        market_data_response::Payload::Candle(candle) => {
+                            state.update(&candle)
+                                .unwrap_or_else(|err| eprintln!("Error updating candle_state: {}", err));
+                        }
+                        _ => {
+                            println!("MarketData unknown message payload: {:?}", next_message);
+                        }
+                    }
+                }
+                _ => {
+                    println!("fail parse streaming message");
+                    time::sleep(Duration::from_millis(1000)).await;
+                }
             }
         }
     }

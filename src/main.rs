@@ -1,33 +1,18 @@
 mod local_tokens;
 mod state;
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use error_chain::ExitCode;
-use flume::{Receiver, Sender};
-use tonic::{Response, Streaming, transport::{Channel, ClientTlsConfig}};
-use futures::{TryStreamExt};
-use futures_util::{FutureExt};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 use prost_types::Timestamp;
-use tinkoff_invest_api::{tcs::{
-    market_data_request::Payload, CandleInstrument,
-    SubscribeCandlesRequest, SubscriptionAction,
-    SubscriptionInterval,
-}, TIResult, TinkoffInvestService, DefaultInterceptor};
-use tinkoff_invest_api::tcs::market_data_stream_service_client::MarketDataStreamServiceClient;
-use tinkoff_invest_api::tcs::{FindInstrumentRequest, FindInstrumentResponse, InstrumentIdType, InstrumentRequest, InstrumentsRequest, InstrumentStatus, InstrumentType, LastPriceInstrument, market_data_request, MarketDataRequest, MarketDataResponse, Share, ShareResponse, SharesResponse, SubscribeLastPriceRequest};
-use tinkoff_invest_api::tcs::instruments_service_client::InstrumentsServiceClient;
-use tokio::{task, time};
-use tokio::sync::RwLock;
-use tonic::codegen::InterceptedService;
-use crate::state::{run_handling_messages};
+use tonic::{transport::{Channel, ClientTlsConfig}};
+use tinkoff_invest_api::{TIResult, TinkoffInvestService};
+use tinkoff_invest_api::tcs::{InstrumentsRequest, InstrumentStatus, Share};
+use tokio::time;
+use crate::state::{run_handling_messages, run_handling_messages_candles};
+use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::state::state::State;
 
-struct TimeRange {
-    start: Option<Timestamp>,
-    end: Option<Timestamp>,
-}
 
 async fn prepare_channel(is_prod: bool) -> TIResult<Channel> {
     let path = if is_prod {
@@ -41,25 +26,6 @@ async fn prepare_channel(is_prod: bool) -> TIResult<Channel> {
         .tls_config(tls)?
         .connect()
         .await?)
-}
-
-fn map_to_candle_subscribe_request(shares: &Vec<Share>) -> Vec<CandleInstrument> {
-    shares.iter().map(|share| {
-        CandleInstrument {
-            figi: share.figi.to_string(),
-            interval: SubscriptionInterval::OneMinute as i32,
-            instrument_id: share.uid.to_string(),
-        }
-    }).collect()
-}
-
-fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInstrument> {
-    shares.iter().map(|share| {
-        LastPriceInstrument {
-            figi: share.figi.to_string(),
-            instrument_id: share.uid.to_string(),
-        }
-    }).collect()
 }
 
 async fn prepare_instruments(service: &TinkoffInvestService, tickers: Vec<&str>) -> Vec<Share> {
@@ -81,16 +47,26 @@ async fn main() -> TIResult<()> {
     let instruments = prepare_instruments(&service, tickers).await;
 
     let last_price_state = Arc::new(LastPriceState::new());
-    let (tx, _) = run_handling_messages(service, instruments.clone(), Arc::clone(&last_price_state)).await;
+    let (tx, _) = run_handling_messages(&service, instruments.clone(), Arc::clone(&last_price_state)).await;
 
-    some_analysis(last_price_state, instruments.clone()).await;
+    let candle_state = Arc::new(CandleState::new());
+    let (tx, _) = run_handling_messages_candles(&service, instruments.clone(), Arc::clone(&candle_state)).await;
+
+    some_analysis_demo(last_price_state, candle_state, instruments.clone()).await;
 
     Ok(())
 }
 
-async fn some_analysis(last_price_state: Arc<LastPriceState>, instruments: Vec<Share>) {
+async fn some_analysis_demo(last_price_state: Arc<LastPriceState>, candle_state:Arc<CandleState>, instruments: Vec<Share>) {
     loop {
         println!("Now price: {:?}", last_price_state.get_last_price(&instruments.get(0).unwrap().uid).await);
+
+        let range = SizedRange::new_1m(Timestamp::from(SystemTime::now()), Timestamp::from(SystemTime::now()));
+        println!("Now candles(1): {:?}", candle_state.get_candles(&instruments.get(0).unwrap().uid, range).await);
+
+        let range_2 = SizedRange::new_1m(Timestamp::from(SystemTime::now()), Timestamp::from(SystemTime::now()));
+        println!("Now candles(2): {:?}", candle_state.get_candles(&instruments.get(1).unwrap().uid, range_2).await);
+
         time::sleep(Duration::from_millis(2000)).await;
     }
 }
