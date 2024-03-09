@@ -7,8 +7,7 @@ use tinkoff_invest_api::tcs::{Share, SubscribeLastPriceRequest, SubscriptionActi
 use tinkoff_invest_api::TinkoffInvestService;
 use tokio::{task, time};
 use tokio::task::JoinHandle;
-use tonic::{Response, Streaming};
-use crate::{prepare_channel};
+use crate::prepare_md_stream;
 use crate::state::candle_state::CandleState;
 use crate::state::last_price_state::LastPriceState;
 use crate::state::state::State;
@@ -43,10 +42,7 @@ fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInst
     }).collect()
 }
 
-async fn prepare_stream_md_last_price(service: &TinkoffInvestService, instruments: Vec<Share>) -> (Sender<MarketDataRequest>, Streaming<MarketDataResponse>) {
-    let channel = prepare_channel(false).await.unwrap();
-    let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
-    let (tx, rx) = flume::unbounded();
+pub async fn run_handling_messages_last_price(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
     let request = MarketDataRequest {
         payload: Some(market_data_request::Payload::SubscribeCandlesRequest(SubscribeCandlesRequest {
             subscription_action: SubscriptionAction::Subscribe as i32,
@@ -54,32 +50,7 @@ async fn prepare_stream_md_last_price(service: &TinkoffInvestService, instrument
             waiting_close: true,
         })),
     };
-    tx.send(request).unwrap();
-    let response: Response<Streaming<MarketDataResponse>> = marketdata_stream
-        .market_data_stream(rx.into_stream())
-        .await.unwrap();
-    (tx, response.into_inner())
-}
-
-async fn prepare_stream_md_candle(service: &TinkoffInvestService, instruments: Vec<Share>) -> (Sender<MarketDataRequest>, Streaming<MarketDataResponse>) {
-    let channel = prepare_channel(false).await.unwrap();
-    let mut marketdata_stream = service.marketdata_stream(channel).await.unwrap();
-    let (tx, rx) = flume::unbounded();
-    let request = MarketDataRequest {
-        payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
-            subscription_action: SubscriptionAction::Subscribe as i32,
-            instruments: map_to_last_price_subscribe_request(&instruments),
-        })),
-    };
-    tx.send(request).unwrap();
-    let response: Response<Streaming<MarketDataResponse>> = marketdata_stream
-        .market_data_stream(rx.into_stream())
-        .await.unwrap();
-    (tx, response.into_inner())
-}
-
-pub async fn run_handling_messages(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
-    let (tx, mut streaming) = prepare_stream_md_last_price(service, instruments.clone()).await;
+    let (tx, mut streaming) = prepare_md_stream(service, request).await;
 
     let updater = task::spawn(async move {
         loop {
@@ -109,7 +80,13 @@ pub async fn run_handling_messages(service: &TinkoffInvestService, instruments: 
 }
 
 pub async fn run_handling_messages_candles(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<CandleState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
-    let (tx, mut streaming) = prepare_stream_md_candle(service, instruments.clone()).await;
+    let request = MarketDataRequest {
+        payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
+            subscription_action: SubscriptionAction::Subscribe as i32,
+            instruments: map_to_last_price_subscribe_request(&instruments),
+        })),
+    };
+    let (tx, mut streaming) = prepare_md_stream(service, request).await;
 
     let updater = task::spawn(async move {
         loop {
