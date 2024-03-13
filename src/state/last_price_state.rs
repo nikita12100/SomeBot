@@ -13,9 +13,7 @@ pub trait LastPriceStateStatistic {
 
 impl State<LastPrice> for LastPriceState {
     fn new() -> Self {
-        LastPriceState {
-            price_by_instrument_uid: RwLock::new(HashMap::new()),
-        }
+        LastPriceState { price_by_instrument_uid: RwLock::new(HashMap::new()) }
     }
     fn update(&self, event: &LastPrice) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = self.price_by_instrument_uid.write().unwrap();

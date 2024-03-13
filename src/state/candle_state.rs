@@ -22,11 +22,7 @@ pub trait CandleStateStatistic {
 
 impl SizedRange {
     fn new(interval: SubscriptionInterval, start: Timestamp, end: Timestamp) -> Self {
-        SizedRange {
-            interval,
-            start,
-            end,
-        }
+        SizedRange { interval, start, end }
     }
     pub fn new_1m(start: Timestamp, end: Timestamp) -> Self {
         Self::new(SubscriptionInterval::OneMinute, start, end)
