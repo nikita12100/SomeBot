@@ -1,12 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 use flume::Sender;
-use tinkoff_invest_api::tcs::{CandleInstrument, LastPriceInstrument, market_data_request, MarketDataRequest, MarketDataResponse, SubscribeCandlesRequest, SubscriptionInterval};
-use tinkoff_invest_api::tcs::market_data_response;
-use tinkoff_invest_api::tcs::{Share, SubscribeLastPriceRequest, SubscriptionAction};
-use tinkoff_invest_api::TinkoffInvestService;
+use tinkoff_invest_api::tcs::{CandleInstrument, LastPriceInstrument, MarketDataRequest, PortfolioResponse, SubscriptionInterval};
+use tinkoff_invest_api::tcs::Share;
+use tinkoff_invest_api::tcs::market_data_request::Payload::{SubscribeCandlesRequest, SubscribeLastPriceRequest};
+use tinkoff_invest_api::tcs::market_data_response::Payload::{Candle, LastPrice, SubscribeCandlesResponse, SubscribeLastPriceResponse};
+use tinkoff_invest_api::tcs::SubscriptionAction::Subscribe;
+use tinkoff_invest_api::{tcs, TinkoffInvestService};
 use tokio::{task, time};
 use tokio::task::JoinHandle;
+use crate::operations::OperationsServiceSandBoxImpl;
 use crate::prepare_md_stream;
 use crate::order::OrderServiceSandboxImpl;
 use crate::state::candle_state::CandleState;
@@ -45,10 +48,16 @@ fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInst
     }).collect()
 }
 
-pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>, order_service: OrderServiceSandboxImpl) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
+pub async fn run_updater_last_price(
+    service: &TinkoffInvestService,
+    instruments: Vec<Share>,
+    state: Arc<LastPriceState>,
+    order_service: OrderServiceSandboxImpl,
+    positions: PortfolioResponse,
+) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
     let request = MarketDataRequest {
-        payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
-            subscription_action: SubscriptionAction::Subscribe as i32,
+        payload: Some(SubscribeLastPriceRequest(tcs::SubscribeLastPriceRequest {
+            subscription_action: Subscribe as i32,
             instruments: map_to_last_price_subscribe_request(&instruments),
         })),
     };
@@ -56,16 +65,17 @@ pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestServ
 
     let updater = task::spawn(async move {
         let mut first_strategy = FirstStrategy::new(Arc::clone(&state), order_service, instruments.clone());
+        first_strategy.warm_up(positions).await.expect("Error while warm up first_strategy");
 
         loop {
             match streaming.message().await.unwrap() {
                 Some(next_message) => {
                     let payload = next_message.payload.clone().unwrap();
                     match payload {
-                        market_data_response::Payload::SubscribeLastPriceResponse(subscribe_response) => {
+                        SubscribeLastPriceResponse(subscribe_response) => {
                             println!("Successfully subscribed to last price streaming.\n{:#?}", subscribe_response);
                         }
-                        market_data_response::Payload::LastPrice(last_price) => {
+                        LastPrice(last_price) => {
                             state.update(&last_price)
                                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
@@ -87,10 +97,10 @@ pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestServ
     (tx, updater)
 }
 
-pub async fn run_daemon_handling_messages_candles(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<CandleState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
+pub async fn run_updater_candles(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<CandleState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
     let request = MarketDataRequest {
-        payload: Some(market_data_request::Payload::SubscribeCandlesRequest(SubscribeCandlesRequest {
-            subscription_action: SubscriptionAction::Subscribe as i32,
+        payload: Some(SubscribeCandlesRequest(tcs::SubscribeCandlesRequest {
+            subscription_action: Subscribe as i32,
             instruments: map_to_candle_subscribe_request(&instruments),
             waiting_close: true,
         })),
@@ -103,10 +113,10 @@ pub async fn run_daemon_handling_messages_candles(service: &TinkoffInvestService
                 Some(next_message) => {
                     let payload = next_message.payload.clone().unwrap();
                     match payload {
-                        market_data_response::Payload::SubscribeCandlesResponse(subscribe_response) => {
+                        SubscribeCandlesResponse(subscribe_response) => {
                             println!("Successfully subscribed to candle streaming.\n{:#?}", subscribe_response);
                         }
-                        market_data_response::Payload::Candle(candle) => {
+                        Candle(candle) => {
                             state.update(&candle)
                                 .unwrap_or_else(|err| eprintln!("Error updating candle_state: {}", err));
                         }

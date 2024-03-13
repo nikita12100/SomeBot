@@ -1,24 +1,16 @@
-use std::sync::{Arc, RwLock};
 use tinkoff_invest_api::DefaultInterceptor;
-use tinkoff_invest_api::tcs::{Account, MoneyValue, OrderDirection, OrderType, PostOrderRequest, PostOrderResponse, Quotation, SandboxPayInRequest};
+use tinkoff_invest_api::tcs::{Account, GetOrdersRequest, GetOrdersResponse, MoneyValue, OrderDirection, OrderState, OrderType, PostOrderRequest, PostOrderResponse, Quotation, SandboxPayInRequest, Share};
 use tinkoff_invest_api::tcs::orders_service_client::OrdersServiceClient;
 use tinkoff_invest_api::tcs::sandbox_service_client::SandboxServiceClient;
 use tonic::codegen::InterceptedService;
 use tonic::transport::Channel;
-
-#[derive(Debug, Clone)]
-pub struct OrderRequest {
-    pub figi: String,
-    pub quantity: i64,
-    pub price: Option<Quotation>,
-    pub direction: OrderDirection,
-    pub order_type: OrderType,
-    pub order_id: String,
-    pub instrument_id: String,
-}
+use uuid::Uuid;
+use crate::strategy::strategy::OpenedPattern;
 
 pub trait OrderService {
-    async fn order(&mut self, request: OrderRequest) -> Result<tonic::Response<PostOrderResponse>, tonic::Status>;
+    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status>;
+    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status>;
+    async fn get_orders(&mut self) -> Vec<OrderState>;
 }
 
 pub struct OrderServiceImpl {
@@ -50,20 +42,48 @@ impl OrderServiceSandboxImpl {
 }
 
 impl OrderService for OrderServiceSandboxImpl {
-    async fn order(&mut self, request: OrderRequest) -> Result<tonic::Response<PostOrderResponse>, tonic::Status> {
+    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status> {
         println!("======== Order =======");
-        println!("request={:#?}", request);
+        println!("request={:#?}, {:#?}, {:#?}, {:#?}, {:#?}", figi, instrument_id, quantity, price, order_type);
         let response = self.client.post_sandbox_order(PostOrderRequest {
-            figi: request.figi,
-            quantity: request.quantity,
-            price: request.price,
-            direction: request.direction as i32,
+            figi: figi,
+            quantity: quantity,
+            price: price,
+            direction: OrderDirection::Buy as i32,
             account_id: self.account.id.clone(),
-            order_type: request.order_type as i32,
-            order_id: request.order_id,
-            instrument_id: request.instrument_id,
+            order_type: order_type as i32,
+            order_id: Uuid::new_v4().to_string(),
+            instrument_id: instrument_id,
         }).await;
         println!("Got response {:#?}", response);
         response
+    }
+
+    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status> {
+        println!("======== Order =======");
+        println!("request={:#?}, {:#?}, {:#?}, {:#?}, {:#?}", figi, instrument_id, quantity, price, order_type);
+        let response = self.client.post_sandbox_order(PostOrderRequest {
+            figi: figi,
+            quantity: quantity,
+            price: price,
+            direction: OrderDirection::Sell as i32,
+            account_id: self.account.id.clone(),
+            order_type: order_type as i32,
+            order_id: Uuid::new_v4().to_string(),
+            instrument_id: instrument_id,
+        }).await;
+        println!("Got response {:#?}", response);
+        response
+    }
+
+    async fn get_orders(&mut self) -> Vec<OrderState> {
+        let orders = self.client.get_sandbox_orders(GetOrdersRequest {
+            account_id: self.account.id.clone()
+        }).await.unwrap().into_inner().orders;
+        println!("--------------------> ORDERS <--------------------");
+        println!("{:#?}", orders);
+        println!("<-------------------- ORDERS -------------------->");
+        println!();
+        orders
     }
 }
