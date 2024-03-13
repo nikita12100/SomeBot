@@ -27,18 +27,18 @@ impl Strategy for FirstStrategy {
         println!("update");
         let orders_to_buy = self.signal_buy(&self.statistic).await;
         let orders_to_sell = self.signal_sell(&self.statistic).await;
-        for order in orders_to_buy {
-            let order_response = self.order_service.order(order).await;
-            match order_response {
-                Ok(response) => {
-                    let mut opened_patterns = self.opened_patterns.write().unwrap();
-                    let _response = response.into_inner();
-                    println!("BUY executed_order_price={:#?}", _response.clone().executed_order_price);
-                    opened_patterns.push(_response);
-                }
-                err => eprint!("Error in orders_to_buy")
-            }
-        }
+        // for order in orders_to_buy {
+        //     let order_response = self.order_service.order(order).await;
+        //     match order_response {
+        //         Ok(response) => {
+        //             let mut opened_patterns = self.opened_patterns.write().unwrap();
+        //             let _response = response.into_inner();
+        //             println!("BUY executed_order_price={:#?}", _response.clone().executed_order_price);
+        //             opened_patterns.push(_response);
+        //         }
+        //         err => eprint!("Error in orders_to_buy")
+        //     }
+        // }
 
         let mut closed_orders_index = Vec::new();
         for order in orders_to_sell {

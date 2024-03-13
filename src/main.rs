@@ -4,22 +4,19 @@ mod user;
 mod strategy;
 mod order;
 
-use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::sync::Arc;
+use std::time::Duration;
 use flume::Sender;
-use prost_types::Timestamp;
-use tonic::{Response, Streaming, transport::{Channel, ClientTlsConfig}};
+use tonic::{Streaming, transport::{Channel, ClientTlsConfig}};
 use tinkoff_invest_api::{TIResult, TinkoffInvestService};
-use tinkoff_invest_api::tcs::{GetAccountsRequest, InstrumentsRequest, InstrumentStatus, market_data_request, MarketDataRequest, MarketDataResponse, Share, SubscribeLastPriceRequest, SubscriptionAction};
-use tokio::{task, time};
-use tokio::task::JoinHandle;
-use crate::order::{OrderServiceImpl, OrderServiceSandboxImpl};
+use tinkoff_invest_api::tcs::{Account, GetAccountsRequest, InstrumentsRequest, InstrumentStatus, MarketDataRequest, MarketDataResponse, Share};
+use tokio::time;
+use crate::order::OrderServiceSandboxImpl;
 use crate::state::{run_daemon_handling_messages_last_price, run_daemon_handling_messages_candles};
-use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
+use crate::state::candle_state::{CandleState, CandleStateStatistic};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::state::state::State;
-use crate::strategy::first_strategy::FirstStrategy;
-use crate::user::sandbox_user_demo;
+use crate::user::{BrokerAccountImpl, BrokerAccountSandboxImpl};
 
 
 async fn prepare_channel() -> TIResult<Channel> {
@@ -58,14 +55,24 @@ async fn prepare_md_stream(service: &TinkoffInvestService, request: MarketDataRe
     (tx, response.into_inner())
 }
 
-async fn prepare_order_service(service: &TinkoffInvestService) -> OrderServiceSandboxImpl {
+async fn chose_account(service: &TinkoffInvestService) -> Account {
+    let channel = prepare_channel().await.unwrap();
+    let mut account_client = service.sandbox(channel).await.unwrap();
+    let accounts = account_client.get_sandbox_accounts(GetAccountsRequest {}).await.unwrap().into_inner().accounts;
+    let chosen_acc = accounts.get(0).unwrap().clone();
+    chosen_acc
+}
+async fn prepare_broker_account_service(service: &TinkoffInvestService, account: Account) -> BrokerAccountSandboxImpl {
+    let channel = prepare_channel().await.unwrap();
+    let broker_account_client = service.sandbox(channel).await.unwrap();
+    BrokerAccountSandboxImpl::new(account, broker_account_client)
+}
+
+async fn prepare_order_service(service: &TinkoffInvestService, account: Account) -> OrderServiceSandboxImpl {
     let channel = prepare_channel().await.unwrap();
     // let order_service = Arc::new(OrderService::new(account, client));
-
-    let mut sandbox_client = service.sandbox(channel).await.unwrap();
-    let accounts = sandbox_client.get_sandbox_accounts(GetAccountsRequest {}).await.unwrap().into_inner().accounts;
-
-    OrderServiceSandboxImpl::new(accounts.get(0).unwrap().clone(), sandbox_client)
+    let sandbox_client = service.sandbox(channel).await.unwrap();
+    OrderServiceSandboxImpl::new(account, sandbox_client)
 }
 
 #[tokio::main]
@@ -76,20 +83,26 @@ async fn main() -> TIResult<()> {
     let service = TinkoffInvestService::new(sandbox_token.parse().unwrap());
     let instruments = prepare_instruments(&service, tickers).await;
 
+    let account = chose_account(&service).await;
+    let broker_account_service = prepare_broker_account_service(&service, account.clone()).await;
+    let order_service_sandbox = prepare_order_service(&service, account).await;
 
     let last_price_state = Arc::new(LastPriceState::new());
     let candle_state = Arc::new(CandleState::new());
 
-    let (tx, _) = run_daemon_handling_messages_last_price(&service, instruments.clone(), Arc::clone(&last_price_state)).await;
+    let (tx, _) = run_daemon_handling_messages_last_price(&service, instruments.clone(), Arc::clone(&last_price_state), order_service_sandbox).await;
     let (tx, _) = run_daemon_handling_messages_candles(&service, instruments.clone(), Arc::clone(&candle_state)).await;
 
-    analysis_demo(last_price_state, candle_state, instruments.clone()).await;
-    // sandbox_user_demo(&service).await;
+    print_states(last_price_state, candle_state, instruments.clone()).await;
+
+    // broker_account.show_orders().await;
+    // broker_account.show_positions().await;
+    // broker_account.show_portfolio().await;
 
     Ok(())
 }
 
-async fn analysis_demo(last_price_state: Arc<LastPriceState>, candle_state: Arc<CandleState>, instruments: Vec<Share>) {
+async fn print_states(last_price_state: Arc<LastPriceState>, candle_state: Arc<CandleState>, instruments: Vec<Share>) {
     loop {
         println!("Now price: {:?}", last_price_state.get_last_price(&instruments.get(0).unwrap().uid).await);
 

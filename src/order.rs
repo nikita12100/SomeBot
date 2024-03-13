@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use tinkoff_invest_api::DefaultInterceptor;
-use tinkoff_invest_api::tcs::{Account, OrderDirection, OrderType, PostOrderRequest, PostOrderResponse, Quotation};
+use tinkoff_invest_api::tcs::{Account, MoneyValue, OrderDirection, OrderType, PostOrderRequest, PostOrderResponse, Quotation, SandboxPayInRequest};
 use tinkoff_invest_api::tcs::orders_service_client::OrdersServiceClient;
 use tinkoff_invest_api::tcs::sandbox_service_client::SandboxServiceClient;
 use tonic::codegen::InterceptedService;
@@ -40,6 +40,12 @@ impl OrderServiceImpl {
 impl OrderServiceSandboxImpl {
     pub fn new(account: Account, client: SandboxServiceClient<InterceptedService<Channel, DefaultInterceptor>>) -> Self {
         Self { account, client }
+    }
+    async fn pay_in(&mut self, amount: MoneyValue) {
+        let _ = self.client.sandbox_pay_in(SandboxPayInRequest {
+            account_id: self.account.id.clone(),
+            amount: Some(amount),
+        }).await;
     }
 }
 

@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::thread::spawn;
 use std::time::Duration;
 use flume::Sender;
 use tinkoff_invest_api::tcs::{CandleInstrument, LastPriceInstrument, market_data_request, MarketDataRequest, MarketDataResponse, SubscribeCandlesRequest, SubscriptionInterval};
@@ -8,7 +7,8 @@ use tinkoff_invest_api::tcs::{Share, SubscribeLastPriceRequest, SubscriptionActi
 use tinkoff_invest_api::TinkoffInvestService;
 use tokio::{task, time};
 use tokio::task::JoinHandle;
-use crate::{prepare_md_stream, prepare_order_service};
+use crate::prepare_md_stream;
+use crate::order::OrderServiceSandboxImpl;
 use crate::state::candle_state::CandleState;
 use crate::state::last_price_state::LastPriceState;
 use crate::state::state::State;
@@ -45,7 +45,7 @@ fn map_to_last_price_subscribe_request(shares: &Vec<Share>) -> Vec<LastPriceInst
     }).collect()
 }
 
-pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
+pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestService, instruments: Vec<Share>, state: Arc<LastPriceState>, order_service: OrderServiceSandboxImpl) -> (Sender<MarketDataRequest>, JoinHandle<()>) {
     let request = MarketDataRequest {
         payload: Some(market_data_request::Payload::SubscribeLastPriceRequest(SubscribeLastPriceRequest {
             subscription_action: SubscriptionAction::Subscribe as i32,
@@ -54,10 +54,8 @@ pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestServ
     };
     let (tx, mut streaming) = prepare_md_stream(service, request).await;
 
-    let order_service_sandbox = prepare_order_service(&service).await;
     let updater = task::spawn(async move {
-
-        let mut first_strategy = FirstStrategy::new(Arc::clone(&state), order_service_sandbox, instruments.clone());
+        let mut first_strategy = FirstStrategy::new(Arc::clone(&state), order_service, instruments.clone());
 
         loop {
             match streaming.message().await.unwrap() {
@@ -86,7 +84,6 @@ pub async fn run_daemon_handling_messages_last_price(service: &TinkoffInvestServ
         }
     }
     );
-
     (tx, updater)
 }
 
@@ -126,6 +123,5 @@ pub async fn run_daemon_handling_messages_candles(service: &TinkoffInvestService
         }
     }
     );
-
     (tx, updater)
 }
