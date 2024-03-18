@@ -5,6 +5,7 @@ mod strategy;
 mod order;
 mod operations;
 
+use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use flume::Sender;
@@ -64,6 +65,7 @@ async fn chose_account(service: &TinkoffInvestService) -> Account {
     let chosen_acc = accounts.get(0).unwrap().clone();
     chosen_acc
 }
+
 async fn prepare_broker_account_service(service: &TinkoffInvestService, account: Account) -> BrokerAccountSandboxImpl {
     let channel = prepare_channel().await.unwrap();
     let broker_account_client = service.sandbox(channel).await.unwrap();
@@ -123,5 +125,104 @@ async fn print_states(last_price_state: Arc<LastPriceState>, candle_state: Arc<C
         // println!("Now candles(2): {:?}", candle_state.get_candles(&instruments.get(1).unwrap().uid, range_2).await);
 
         time::sleep(Duration::from_millis(2000)).await;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::cmp::Ordering;
+    use super::*;
+    use std::error::Error;
+    use chrono::DateTime;
+    use csv::{ReaderBuilder, StringRecord};
+    use prost_types::Timestamp;
+    use tinkoff_invest_api::tcs::{Candle, market_data_response, Quotation, SubscriptionInterval};
+
+
+    fn read_quotation(data: &str) -> Quotation {
+        let mut splited = data.split(".");
+        Quotation {
+            units: splited.next().unwrap().parse().unwrap(),
+            nano: splited.next().unwrap().parse().unwrap(),
+        }
+    }
+
+    fn read_candle(row: StringRecord, interval: SubscriptionInterval) -> Candle {
+        let mut data = row.get(0).unwrap().split(";");
+        let instrument_uid = data.next().unwrap().to_string();
+        let time = match DateTime::parse_from_rfc3339(data.next().unwrap()) {
+            Ok(dt) => Some(Timestamp {
+                seconds: dt.timestamp(),
+                nanos: dt.timestamp_subsec_nanos() as i32,
+            }),
+            _ => {
+                eprint!("Error parsing time in hist data {:?}", data);
+                None
+            }
+        };
+        let open = read_quotation(data.next().unwrap());
+        let close = read_quotation(data.next().unwrap());
+        let high = read_quotation(data.next().unwrap());
+        let low = read_quotation(data.next().unwrap());
+        let volume = data.next().unwrap();
+        Candle {
+            figi: instrument_uid.clone(),
+            interval: interval as i32,
+            open: Some(open),
+            high: Some(high),
+            low: Some(low),
+            close: Some(close),
+            volume: volume.parse().unwrap(),
+            time: time,
+            last_trade_ts: None,
+            instrument_uid: instrument_uid,
+        }
+    }
+
+    fn candles_comparator(candle_1: &Candle, candle_2: &Candle) -> Ordering {
+        let seconds_1 = candle_1.clone().time.unwrap().seconds;
+        let seconds_2 = candle_2.clone().time.unwrap().seconds;
+        let nanos_1 = candle_1.clone().time.unwrap().nanos;
+        let nanos_2 = candle_2.clone().time.unwrap().nanos;
+        if seconds_1 < seconds_2 || (seconds_1 == seconds_2 && nanos_1 < nanos_2) {
+            Ordering::Less
+        } else if seconds_1 > seconds_2 || (seconds_1 == seconds_2 && nanos_1 > nanos_2) {
+            Ordering::Greater
+        } else {
+            Ordering::Equal
+        }
+    }
+
+    // read from csv files, return candle stream
+    async fn prepare_hist_data(dir_path: &str, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
+        let mut candles = Vec::new();
+        let dir_entries = fs::read_dir(dir_path).unwrap();
+        for entry in dir_entries {
+            let file_path = entry.unwrap().path();
+            if file_path.is_file() && file_path.extension().map(|ext| ext == "csv").unwrap_or(false) {
+                let file_content = fs::read_to_string(file_path).unwrap();
+                let mut csv_reader = ReaderBuilder::new().from_reader(file_content.as_bytes());
+                match csv_reader.records().next() {
+                    Some(candle_raw) => {
+                        candles.push(read_candle(candle_raw.unwrap(), interval));
+                        candles.sort_by(candles_comparator);
+                    }
+                    _ => eprint!("Error while parsing hist data, got unexpected value")
+                }
+            } else {
+                eprint!("Empty dir")
+            }
+            break;
+        }
+        Ok(candles)
+    }
+
+    #[tokio::test]
+    async fn test_hummer_strategy() {
+        let stream = prepare_hist_data("hist_data/2023-SBER/", SubscriptionInterval::OneMinute).await.unwrap();
+
+        println!("stream={:#?}", stream);
+
+        assert_eq!(true, false);
     }
 }
