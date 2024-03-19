@@ -142,8 +142,14 @@ mod test {
     fn read_quotation(data: &str) -> Quotation {
         let mut splited = data.split(".");
         Quotation {
-            units: splited.next().unwrap().parse().unwrap(),
-            nano: splited.next().unwrap().parse().unwrap(),
+            units: splited.next().unwrap().parse::<i64>().unwrap(),
+            nano: match splited.next().get_or_insert("0").parse::<i64>() {
+                Ok(x) => x as i32,
+                _ => {
+                    println!("Error while parsing nano in data={:#?}", data);
+                    0
+                }
+            },
         }
     }
 
@@ -179,49 +185,33 @@ mod test {
         }
     }
 
-    fn candles_comparator(candle_1: &Candle, candle_2: &Candle) -> Ordering {
-        let seconds_1 = candle_1.clone().time.unwrap().seconds;
-        let seconds_2 = candle_2.clone().time.unwrap().seconds;
-        let nanos_1 = candle_1.clone().time.unwrap().nanos;
-        let nanos_2 = candle_2.clone().time.unwrap().nanos;
-        if seconds_1 < seconds_2 || (seconds_1 == seconds_2 && nanos_1 < nanos_2) {
-            Ordering::Less
-        } else if seconds_1 > seconds_2 || (seconds_1 == seconds_2 && nanos_1 > nanos_2) {
-            Ordering::Greater
-        } else {
-            Ordering::Equal
-        }
-    }
-
     // read from csv files, return candle stream
     async fn prepare_hist_data(dir_path: &str, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
         let mut candles = Vec::new();
-        let dir_entries = fs::read_dir(dir_path).unwrap();
+        let mut dir_entries: Vec<_> = fs::read_dir(dir_path).unwrap().map(|r| r.unwrap()).collect();
+        dir_entries.sort_by_key(|dir| dir.path());
         for entry in dir_entries {
-            let file_path = entry.unwrap().path();
+            let file_path = entry.path();
             if file_path.is_file() && file_path.extension().map(|ext| ext == "csv").unwrap_or(false) {
                 let file_content = fs::read_to_string(file_path).unwrap();
                 let mut csv_reader = ReaderBuilder::new().from_reader(file_content.as_bytes());
-                match csv_reader.records().next() {
-                    Some(candle_raw) => {
-                        candles.push(read_candle(candle_raw.unwrap(), interval));
-                        candles.sort_by(candles_comparator);
-                    }
-                    _ => eprint!("Error while parsing hist data, got unexpected value")
-                }
+                csv_reader.records().for_each(|row| {
+                    candles.push(read_candle(row.unwrap(), interval));
+                });
             } else {
                 eprint!("Empty dir")
             }
-            break;
         }
         Ok(candles)
     }
 
     #[tokio::test]
     async fn test_hummer_strategy() {
-        let stream = prepare_hist_data("hist_data/2023-SBER/", SubscriptionInterval::OneMinute).await.unwrap();
+        // download data by script
+        let sorted_stream = prepare_hist_data("hist_data/2023-SBER/", SubscriptionInterval::OneMinute).await.unwrap();
+        println!("stream_len={:#?}", sorted_stream.len());
 
-        println!("stream={:#?}", stream);
+        // cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]
 
         assert_eq!(true, false);
     }
