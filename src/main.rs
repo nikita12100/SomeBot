@@ -130,14 +130,18 @@ async fn print_states(last_price_state: Arc<LastPriceState>, candle_state: Arc<C
 
 #[cfg(test)]
 mod test {
-    use std::cmp::Ordering;
     use super::*;
     use std::error::Error;
     use chrono::DateTime;
     use csv::{ReaderBuilder, StringRecord};
     use prost_types::Timestamp;
-    use tinkoff_invest_api::tcs::{Candle, market_data_response, Quotation, SubscriptionInterval};
-
+    use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
+    use std::fs::File;
+    use std::io::{self, Read, Write};
+    use std::path::Path;
+    use reqwest::header::{AUTHORIZATION, HeaderValue};
+    use reqwest::Response;
+    use zip::ZipArchive;
 
     fn read_quotation(data: &str) -> Quotation {
         let mut splited = data.split(".");
@@ -185,10 +189,63 @@ mod test {
         }
     }
 
+    async fn download_data(bearer_token: &str, dir_path: &str, instrument: &Share, year: u32) -> Result<(), Box<dyn Error>> {
+        let url =
+            format!("https://invest-public-api.tinkoff.ru/history-data?figi={}&instrument_uid={}&year={}",
+                    instrument.figi,
+                    instrument.uid,
+                    year
+            );
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(url)
+            .header(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {}", bearer_token))?)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .expect("GET hist data failed");
+
+        let file_name = format!("{}/{}-{}.zip", dir_path, instrument.ticker, year);
+        let file = File::create(file_name.clone())?;
+        fs::write(&file_name, resp).expect("error writing file");
+
+        println!("File {:?} downloaded successfully!", file);
+
+        Ok(())
+    }
+
+    async fn unzip_data(dir_path: &str, instrument: &Share, year: u32) -> Result<(), Box<dyn Error>> {
+        let folder_name = format!("{}/{}-{}", dir_path, instrument.ticker, year);
+        let archive_name = format!("{}/{}-{}.zip", dir_path, instrument.ticker, year);
+        let archive = File::open(archive_name.clone())?;
+        let mut archive = ZipArchive::new(archive)?;
+
+        fs::create_dir_all(folder_name.clone()).expect("Error creating dir for zip data hist");
+
+        for idx in 0..archive.len() {
+            let mut file = archive.by_index(idx).unwrap();
+            let outpath = match file.enclosed_name() {
+                Some(path) => format!("{}/{}", folder_name, path.display()),
+                None => continue,
+            };
+            let mut outfile = File::create(&outpath).unwrap();
+            io::copy(&mut file, &mut outfile).unwrap();
+        }
+
+        fs::remove_file(archive_name.clone()).expect(&*format!("Error while remove zip file {:?}", archive_name));
+
+        Ok(())
+    }
+
     // read from csv files, return candle stream
-    async fn prepare_hist_data(dir_path: &str, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
+    async fn prepare_hist_data(dir_path: &str, instrument: &Share, year: u32, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
+        let folder_name = format!("{}/{}-{}", dir_path, instrument.ticker, year);
+
         let mut candles = Vec::new();
-        let mut dir_entries: Vec<_> = fs::read_dir(dir_path).unwrap().map(|r| r.unwrap()).collect();
+        let mut dir_entries: Vec<_> = fs::read_dir(folder_name).unwrap().map(|r| r.unwrap()).collect();
         dir_entries.sort_by_key(|dir| dir.path());
         for entry in dir_entries {
             let file_path = entry.path();
@@ -207,8 +264,19 @@ mod test {
 
     #[tokio::test]
     async fn test_hummer_strategy() {
-        // download data by script
-        let sorted_stream = prepare_hist_data("hist_data/2023-SBER/", SubscriptionInterval::OneMinute).await.unwrap();
+        let (prod_token, sandbox_token) = local_tokens::get_local_tokens();
+        let tickers = vec!["SBER"];
+
+        let service = TinkoffInvestService::new(sandbox_token.parse().unwrap());
+        let instruments = prepare_instruments(&service, tickers).await;
+
+        let dir_path = "./hist_data";
+        fs::create_dir_all(dir_path.clone()).expect("Error creating dir_path for data hist");
+
+        download_data(&sandbox_token, dir_path, instruments.get(0).unwrap(), 2023).await.expect("Error while download_data");
+        unzip_data(dir_path, instruments.get(0).unwrap(), 2023).await.expect("Error while unzip_data");
+
+        let sorted_stream = prepare_hist_data(dir_path, instruments.get(0).unwrap(), 2023, SubscriptionInterval::OneMinute).await.unwrap();
         println!("stream_len={:#?}", sorted_stream.len());
 
         // cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]

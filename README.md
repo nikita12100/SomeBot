@@ -4,7 +4,7 @@
 
 Set tokens in `local_token.rs`, then `cargo run`
 
-For history training put folder with data in `./hist_data` and run `cargo test`
+History training create folder `./hist_data`, then download zip file per (share, year), then unzip them into folder `[ticker]-[year]`, then remove zip file. Try it by run `cargo test`
 
 ## Road map
 

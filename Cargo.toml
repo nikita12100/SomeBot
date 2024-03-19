@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 error-chain = "0.12.4"
-reqwest = "0.11.24"
-tokio = { version = "1.0.0", features = ["rt", "time", "rt-multi-thread", "macros"] }
+reqwest = { version = "0.11.24", features = ["stream"] }
+tokio = { version = "1.0.0", features = ["full"] }
 tinkoff-invest-api = { version = "0.2.3" }
 futures = "0.3.30"
 futures-util = "0.3.30"
@@ -21,3 +21,5 @@ uuid = { version = "1.7.0", features = ["v4"] }
 csv = {version = "1.3.0"}
 serde = { version = "1.0.197", features = ["derive"] }
 chrono = "0.4.35"
+tokio-stream = "0.1.14"
+zip = "0.6.6"
