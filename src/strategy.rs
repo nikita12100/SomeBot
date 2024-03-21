@@ -1,3 +1,3 @@
 pub mod first_strategy;
 pub mod strategy;
-mod hammer_strategy;
+pub mod hammer_strategy;

@@ -1,3 +1,4 @@
+use duplicate::duplicate_item;
 use tinkoff_invest_api::DefaultInterceptor;
 use tinkoff_invest_api::tcs::{Account, PortfolioRequest, PortfolioResponse, PositionsRequest, PositionsResponse};
 use tinkoff_invest_api::tcs::operations_service_client::OperationsServiceClient;
@@ -34,27 +35,22 @@ impl OperationsServiceSandBoxImpl {
     }
 }
 
-impl OperationsService for OperationsServiceSandBoxImpl {
+#[duplicate_item(
+service_impl                      _get_portfolio              _get_positions;
+[ OperationsServiceImpl ]         [ get_portfolio ]          [ get_positions ];
+[ OperationsServiceSandBoxImpl ]  [ get_sandbox_portfolio ]  [ get_sandbox_positions ];
+)]
+impl OperationsService for service_impl {
     async fn get_portfolio(&mut self) -> PortfolioResponse {
-        let portfolio = self.client.get_sandbox_portfolio(PortfolioRequest {
+        self.client._get_portfolio(PortfolioRequest {
             account_id: self.account.id.clone(),
             currency: CurrencyRequest::Rub as i32,
-        }).await.unwrap().into_inner();
-        println!("--------------------> PORTFOLIO <--------------------");
-        println!("{:#?}", portfolio);
-        println!("<-------------------- PORTFOLIO -------------------->");
-        println!();
-        portfolio
+        }).await.unwrap().into_inner()
     }
 
     async fn get_positions(&mut self) -> PositionsResponse {
-        let positions = self.client.get_sandbox_positions(PositionsRequest {
+        self.client._get_positions(PositionsRequest {
             account_id: self.account.id.clone()
-        }).await.unwrap().into_inner();
-        println!("--------------------> POSITIONS <--------------------");
-        println!("{:#?}", positions);
-        println!("<-------------------- POSITIONS -------------------->");
-        println!();
-        positions
+        }).await.unwrap().into_inner()
     }
 }

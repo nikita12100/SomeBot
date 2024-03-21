@@ -138,10 +138,11 @@ mod test {
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
     use std::fs::File;
     use std::io::{self, Read, Write};
-    use std::path::Path;
     use reqwest::header::{AUTHORIZATION, HeaderValue};
-    use reqwest::Response;
     use zip::ZipArchive;
+    use crate::order::OrderServiceHistBoxImpl;
+    use crate::strategy::hammer_strategy::HummerStrategy;
+    use crate::strategy::strategy::Strategy;
 
     fn read_quotation(data: &str) -> Quotation {
         let mut splited = data.split(".");
@@ -240,9 +241,13 @@ mod test {
         Ok(())
     }
 
-    // read from csv files, return candle stream
-    async fn prepare_hist_data(dir_path: &str, instrument: &Share, year: u32, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
+    async fn prepare_hist_data(bearer_token: &str, dir_path: &str, instrument: &Share, year: u32, interval: SubscriptionInterval) -> Result<Vec<Candle>, Box<dyn Error>> {
         let folder_name = format!("{}/{}-{}", dir_path, instrument.ticker, year);
+
+        if fs::read_dir(folder_name.clone()).is_err() {
+            download_data(bearer_token, dir_path, instrument, 2023).await.expect("Error while download_data");
+            unzip_data(dir_path, instrument, 2023).await.expect("Error while unzip_data");
+        }
 
         let mut candles = Vec::new();
         let mut dir_entries: Vec<_> = fs::read_dir(folder_name).unwrap().map(|r| r.unwrap()).collect();
@@ -264,22 +269,39 @@ mod test {
 
     #[tokio::test]
     async fn test_hummer_strategy() {
-        let (prod_token, sandbox_token) = local_tokens::get_local_tokens();
+        let (_, sandbox_token) = local_tokens::get_local_tokens();
         let tickers = vec!["SBER"];
 
         let service = TinkoffInvestService::new(sandbox_token.parse().unwrap());
         let instruments = prepare_instruments(&service, tickers).await;
 
         let dir_path = "./hist_data";
-        fs::create_dir_all(dir_path.clone()).expect("Error creating dir_path for data hist");
+        fs::create_dir_all(dir_path).expect("Error creating dir_path for data hist");
 
-        download_data(&sandbox_token, dir_path, instruments.get(0).unwrap(), 2023).await.expect("Error while download_data");
-        unzip_data(dir_path, instruments.get(0).unwrap(), 2023).await.expect("Error while unzip_data");
-
-        let sorted_stream = prepare_hist_data(dir_path, instruments.get(0).unwrap(), 2023, SubscriptionInterval::OneMinute).await.unwrap();
+        let year = 2023;
+        let sorted_stream = prepare_hist_data(&sandbox_token, dir_path, instruments.get(0).unwrap(), year, SubscriptionInterval::OneMinute).await.unwrap();
         println!("stream_len={:#?}", sorted_stream.len());
+        // todo cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]
 
-        // cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]
+        let start_balance = Quotation { units: 1000, nano: 0 };
+        let order_service_mock = OrderServiceHistBoxImpl::new(start_balance);
+
+        let state = Arc::new(CandleState::new());
+        let mut hummer_strategy = HummerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone());
+
+        for candle in sorted_stream {
+            state.update(&candle)
+                .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
+
+            hummer_strategy.update().await.expect("Error updating first strategy");
+        }
+
+        let result = order_service_mock.get_balance();
+        println!("HummerStrategy for \
+          instruments={:?},\
+          year={:?}
+          start_balance={:?}
+          finished with balance={:?}", instruments, year, start_balance, result);
 
         assert_eq!(true, false);
     }

@@ -1,6 +1,5 @@
 use std::sync::{Arc, RwLock};
-use tinkoff_invest_api::tcs::{OrderDirection, OrderType, PortfolioPosition, PortfolioResponse, PositionsResponse, PostOrderRequest, PostOrderResponse, Quotation, Share};
-use uuid::Uuid;
+use tinkoff_invest_api::tcs::{OrderType, PortfolioResponse, Quotation, Share};
 use crate::order::{OrderService, OrderServiceSandboxImpl};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::strategy::strategy::{map_position_to_pattern, OpenedPattern, Strategy};
@@ -37,7 +36,6 @@ impl Strategy for FirstStrategy {
     }
 
     async fn update(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("update");
         let orders_to_buy = self.signal_buy(&self.statistic).await;
         let orders_to_sell = self.signal_sell(&self.statistic).await;
         for order in orders_to_buy {
