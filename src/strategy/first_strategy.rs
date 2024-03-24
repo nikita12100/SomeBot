@@ -43,7 +43,7 @@ impl Strategy for FirstStrategy {
                 order.figi.clone(),
                 order.instrument_id.clone(),
                 order.quantity.clone(),
-                order.price.clone(),
+                order.price_open.clone(),
                 OrderType::Market,
             ).await;
             match order_response {
@@ -64,12 +64,12 @@ impl Strategy for FirstStrategy {
                 order.figi.clone(),
                 order.instrument_id.clone(),
                 order.quantity.clone(),
-                order.price.clone(),
+                order.price_open.clone(),
                 OrderType::Market,
             ).await;
             if closed_order.is_ok() {
                 let _closed_order = closed_order.unwrap().into_inner();
-                println!("GOT PROFIT={:?}-{:?}", &order.price, &_closed_order.executed_order_price);
+                println!("GOT PROFIT={:?}-{:?}", &order.price_open, &_closed_order.executed_order_price);
                 let index_to_remove = self.opened_patterns.read().unwrap().iter().position(|x| x.instrument_id == order.instrument_id).unwrap();
                 closed_orders_index.push(index_to_remove);
             }
@@ -104,7 +104,8 @@ impl Strategy for FirstStrategy {
             Some(OpenedPattern {
                 figi: instrument.figi.clone(),
                 quantity: 1,
-                price: None,
+                price_open: None,
+                price_close: None,
                 instrument_id: instrument.clone().uid,
             })
         } else {
@@ -117,7 +118,7 @@ impl Strategy for FirstStrategy {
         let _opened_patterns = self.opened_patterns.read().unwrap().clone();
         for order in _opened_patterns {
             let curr_price = stat.get_last_price(&order.instrument_id).await;
-            match (curr_price, order.price.clone()) {
+            match (curr_price, order.price_open.clone()) {
                 (Some(c_price), Some(o_price)) => {
                     if c_price.units > o_price.units ||
                         (c_price.units == o_price.units &&

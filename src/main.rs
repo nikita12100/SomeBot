@@ -4,14 +4,16 @@ mod user;
 mod strategy;
 mod order;
 mod operations;
+mod trading_cfg;
 
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 use flume::Sender;
+use prost_types::Timestamp;
 use tonic::{Streaming, transport::{Channel, ClientTlsConfig}};
 use tinkoff_invest_api::{TIResult, TinkoffInvestService};
-use tinkoff_invest_api::tcs::{Account, GetAccountsRequest, InstrumentsRequest, InstrumentStatus, MarketDataRequest, MarketDataResponse, Share};
+use tinkoff_invest_api::tcs::{Account, GetAccountsRequest, InstrumentsRequest, InstrumentStatus, MarketDataRequest, MarketDataResponse, Quotation, Share};
 use tokio::time;
 use crate::operations::{OperationsServiceSandBoxImpl, OperationsService};
 use crate::order::OrderServiceSandboxImpl;
@@ -128,6 +130,61 @@ async fn print_states(last_price_state: Arc<LastPriceState>, candle_state: Arc<C
     }
 }
 
+trait Cmp<T> {
+    fn _le(&self, other: &T) -> bool;
+    fn _leq(&self, other: &T) -> bool;
+    fn _ge(&self, other: &T) -> bool;
+    fn _geq(&self, other: &T) -> bool;
+}
+
+impl Cmp<Timestamp> for Timestamp {
+    fn _le(&self, other: &Timestamp) -> bool {
+        self.seconds < other.seconds ||
+            (self.seconds == other.seconds && self.nanos < other.nanos)
+    }
+
+    fn _leq(&self, other: &Timestamp) -> bool {
+        self.seconds < other.seconds ||
+            (self.seconds == other.seconds && self.nanos < other.nanos) ||
+            self == other
+    }
+
+    fn _ge(&self, other: &Timestamp) -> bool {
+        self.seconds > other.seconds ||
+            (self.seconds == other.seconds && self.nanos > other.nanos)
+    }
+
+    fn _geq(&self, other: &Timestamp) -> bool {
+        self.seconds > other.seconds ||
+            (self.seconds == other.seconds && self.nanos > other.nanos) &&
+                self == other
+    }
+}
+
+impl Cmp<Quotation> for Quotation {
+    fn _le(&self, other: &Quotation) -> bool {
+        self.units < other.units ||
+            (self.units == other.units && self.nano < other.nano)
+    }
+
+    fn _leq(&self, other: &Quotation) -> bool {
+        self.units < other.units ||
+            (self.units == other.units && self.nano < other.nano) ||
+            self == other
+    }
+
+    fn _ge(&self, other: &Quotation) -> bool {
+        self.units > other.units ||
+            (self.units == other.units && self.nano > other.nano)
+    }
+
+    fn _geq(&self, other: &Quotation) -> bool {
+        self.units > other.units ||
+            (self.units == other.units && self.nano > other.nano) &&
+                self == other
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -141,7 +198,7 @@ mod test {
     use reqwest::header::{AUTHORIZATION, HeaderValue};
     use zip::ZipArchive;
     use crate::order::OrderServiceHistBoxImpl;
-    use crate::strategy::hammer_strategy::HummerStrategy;
+    use crate::strategy::hammer_strategy::HammerStrategy;
     use crate::strategy::strategy::Strategy;
 
     fn read_quotation(data: &str) -> Quotation {
@@ -268,7 +325,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_hummer_strategy() {
+    async fn test_hammer_strategy() {
         let (_, sandbox_token) = local_tokens::get_local_tokens();
         let tickers = vec!["SBER"];
 
@@ -287,17 +344,17 @@ mod test {
         let order_service_mock = OrderServiceHistBoxImpl::new(start_balance);
 
         let state = Arc::new(CandleState::new());
-        let mut hummer_strategy = HummerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone());
+        let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone());
 
         for candle in sorted_stream {
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
-            hummer_strategy.update().await.expect("Error updating first strategy");
+            hammer_strategy.update().await.expect("Error updating first strategy");
         }
 
         let result = order_service_mock.get_balance();
-        println!("HummerStrategy for \
+        println!("HammerStrategy for \
           instruments={:?},\
           year={:?}
           start_balance={:?}

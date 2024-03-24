@@ -27,7 +27,10 @@ pub struct OrderServiceSandboxImpl {
 }
 
 pub struct OrderServiceHistBoxImpl {
-    balance: Quotation, // fixme map<instrument, Quotation> for multi instruments
+    commission: Quotation,
+    balance: Quotation,
+    // fixme map<instrument, Quotation> for multi instruments
+    trash_hold: u64,
 }
 
 impl OrderServiceImpl {
@@ -49,7 +52,7 @@ impl OrderServiceSandboxImpl {
 }
 
 impl OrderServiceHistBoxImpl {
-    pub fn new(balance: Quotation) -> Self { Self { balance } }
+    pub fn new(balance: Quotation, commission: Quotation, trash_hold: u64) -> Self { Self { commission, balance, trash_hold } }
     pub fn get_balance(&self) -> Quotation { self.balance.clone() }
 }
 
@@ -94,6 +97,9 @@ impl OrderService for service_impl {
 
 impl OrderService for OrderServiceHistBoxImpl {
     async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
+        if self.balance.units < self.trash_hold as i64 {
+            panic!("Strategy lost: trying buy when balance:{:?} < trash_hold:{:?}", self.balance.units, self.trash_hold)
+        }
         if self.balance.units > 0 && self.balance.nano > 0 &&
             price.is_some() && quantity > 0 &&
             self.balance.units - price.clone().unwrap().units * quantity > 0 &&
@@ -101,25 +107,37 @@ impl OrderService for OrderServiceHistBoxImpl {
             price.clone().unwrap().units > 0 &&
             price.clone().unwrap().nano > 0 {
             self.balance.units -= price.clone().unwrap().units * quantity;
-            self.balance.nano -= price.unwrap().nano * quantity as i32;
+            self.balance.nano -= price.clone().unwrap().nano * quantity as i32;
+
+            self.balance.units -= self.commission.units;
+            self.balance.nano -= self.commission.nano;
+
             Ok(Response::new(PostOrderResponse {
-                order_id: "".to_string(),
+                order_id: "hist".to_string(),
                 execution_report_status: 0,
-                lots_requested: 0,
-                lots_executed: 0,
+                lots_requested: quantity,
+                lots_executed: quantity,
                 initial_order_price: None,
-                executed_order_price: None,
+                executed_order_price: Some(MoneyValue {
+                    currency: "".to_string(),
+                    units: price.clone().unwrap().units,
+                    nano: price.clone().unwrap().nano,
+                }),
                 total_order_amount: None,
                 initial_commission: None,
-                executed_commission: None,
+                executed_commission: Some(MoneyValue {
+                    currency: "".to_string(),
+                    units: self.commission.units,
+                    nano: self.commission.nano,
+                }),
                 aci_value: None,
                 figi,
-                direction: 0,
+                direction: OrderDirection::Buy as i32,
                 initial_security_price: None,
                 order_type: 0,
-                message: "".to_string(),
+                message: "hist training buy".to_string(),
                 initial_order_price_pt: None,
-                instrument_uid: "".to_string(),
+                instrument_uid: instrument_id.clone(),
             }))
         } else {
             Err(Status::new(
@@ -134,25 +152,37 @@ impl OrderService for OrderServiceHistBoxImpl {
             price.clone().unwrap().units > 0 &&
             price.clone().unwrap().nano > 0 {
             self.balance.units += price.clone().unwrap().units * quantity;
-            self.balance.nano += price.unwrap().nano * quantity as i32;
+            self.balance.nano += price.clone().unwrap().nano * quantity as i32;
+
+            self.balance.units -= self.commission.units;
+            self.balance.nano -= self.commission.nano;
+
             Ok(Response::new(PostOrderResponse {
-                order_id: "".to_string(),
+                order_id: "hist".to_string(),
                 execution_report_status: 0,
-                lots_requested: 0,
-                lots_executed: 0,
+                lots_requested: quantity,
+                lots_executed: quantity,
                 initial_order_price: None,
-                executed_order_price: None,
+                executed_order_price: Some(MoneyValue {
+                    currency: "".to_string(),
+                    units: price.clone().unwrap().units,
+                    nano: price.clone().unwrap().nano,
+                }),
                 total_order_amount: None,
                 initial_commission: None,
-                executed_commission: None,
+                executed_commission: Some(MoneyValue {
+                    currency: "".to_string(),
+                    units: self.commission.units,
+                    nano: self.commission.nano,
+                }),
                 aci_value: None,
                 figi,
-                direction: 0,
+                direction: OrderDirection::Sell as i32,
                 initial_security_price: None,
                 order_type: 0,
-                message: "".to_string(),
+                message: "hist training sell".to_string(),
                 initial_order_price_pt: None,
-                instrument_uid: "".to_string(),
+                instrument_uid: instrument_id.clone(),
             }))
         } else {
             Err(Status::new(

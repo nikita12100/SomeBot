@@ -8,8 +8,14 @@ History training create folder `./hist_data`, then download zip file per (share,
 
 ## Road map
 
- - historical training
+ - historical training[in progress]
+ - hot config for strategy setting
+ - stop loss
+ - add hist load on start for prepare patterns
  - handle error while order
  - warm up problem
  - remove each unwrap for more stable work
+
+Вопросы:
+ - выставлять заявки парой или нет?
 
