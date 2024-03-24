@@ -189,17 +189,18 @@ impl Cmp<Quotation> for Quotation {
 mod test {
     use super::*;
     use std::error::Error;
+    use std::io::{self, Read, Write};
+    use std::fs::File;
     use chrono::DateTime;
     use csv::{ReaderBuilder, StringRecord};
     use prost_types::Timestamp;
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
-    use std::fs::File;
-    use std::io::{self, Read, Write};
     use reqwest::header::{AUTHORIZATION, HeaderValue};
     use zip::ZipArchive;
     use crate::order::OrderServiceHistBoxImpl;
     use crate::strategy::hammer_strategy::HammerStrategy;
     use crate::strategy::strategy::Strategy;
+    use crate::trading_cfg::{HammerCfg, HammerStrategySettings, TrendCfg};
 
     fn read_quotation(data: &str) -> Quotation {
         let mut splited = data.split(".");
@@ -341,24 +342,44 @@ mod test {
         // todo cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]
 
         let start_balance = Quotation { units: 1000, nano: 0 };
-        let order_service_mock = OrderServiceHistBoxImpl::new(start_balance);
+        let commission = 30_u8; // percentage
+        let trash_hold = 100_u64;
+        let order_service_mock = OrderServiceHistBoxImpl::new(start_balance.clone(), commission, trash_hold);
 
+        let hammer_settings = HammerStrategySettings {
+            hammer_cfg: HammerCfg {
+                bottom_start: 80,
+                bottom_end: 95,
+                up_start: 60,
+                up_end: 75,
+            },
+            trend_cfg: TrendCfg {
+                max_candle_skip: 1,
+            },
+            window_size: 5,
+        };
         let state = Arc::new(CandleState::new());
-        let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone());
+        let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone(), hammer_settings);
 
+        let mut i = 0;
         for candle in sorted_stream {
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
             hammer_strategy.update().await.expect("Error updating first strategy");
+            i += 1;
+            println!("i={}", i);
+            if i > 1000 { // 261933
+                break
+            }
         }
 
-        let result = order_service_mock.get_balance();
-        println!("HammerStrategy for \
-          instruments={:?},\
+        println!("HammerStrategy for
+          instruments={:?},
           year={:?}
           start_balance={:?}
-          finished with balance={:?}", instruments, year, start_balance, result);
+          trash_hold={:?}
+          finished.", instruments.iter().map(|s| s.ticker.clone()).collect::<Vec<_>>(), year, start_balance, trash_hold);
 
         assert_eq!(true, false);
     }

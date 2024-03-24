@@ -10,13 +10,14 @@ pub struct HammerCfg {
 }
 #[derive(Debug, Clone)]
 pub struct TrendCfg {
-    pub max_candle_skip: u8
+    pub max_candle_skip: i8
 }
 
 #[derive(Debug, Clone)]
 pub struct HammerStrategySettings {
     pub hammer_cfg: HammerCfg,
     pub trend_cfg: TrendCfg,
+    // как далеко мы смотрим назад при поиске паттерна при покупке
     pub window_size: u64, // in minutes
 }
 

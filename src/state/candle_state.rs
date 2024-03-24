@@ -7,6 +7,7 @@ use crate::Cmp;
 use crate::state::state::State;
 use crate::trading_cfg::{HammerCfg, TrendCfg};
 
+#[derive(Debug, Clone)]
 pub struct SizedRange {
     interval: SubscriptionInterval,
     start: Timestamp,
@@ -35,7 +36,7 @@ pub trait CandleStateStatistic {
 
 impl SizedRange {
     fn new(interval: SubscriptionInterval, start: Timestamp, end: Timestamp) -> Self {
-        if start._ge(&end) {
+        if start._le(&end) {
             SizedRange { interval, start, end }
         } else {
             panic!("Error while creating SizedRange start={:#?} must be > end=={:#?}", start, end)
@@ -173,52 +174,60 @@ impl CandleStateStatistic for CandleState {
     async fn is_trend_bearish(&self, trend_cfg: &TrendCfg, instrument_uid: &String, range: SizedRange) -> bool {
         let candles = self.get_candles(instrument_uid, range).await.unwrap();
 
-        let mut _low = candles.get(0).unwrap().clone().low.unwrap();
-        let mut is_trend_bearish = true;
-        let mut candles_to_skip = trend_cfg.max_candle_skip;
-        for candle in candles {
-            if candle.low.clone().unwrap()._leq(&_low) {
-                _low = candle.low.unwrap();
-                candles_to_skip = trend_cfg.max_candle_skip;
-                continue;
-            } else {
-                candles_to_skip -= 1;
-                if candles_to_skip < 0 {
-                    is_trend_bearish = false;
-                    break;
+        if candles.len() == 0 {
+            false
+        } else {
+            let mut _low = candles.get(0).unwrap().clone().low.unwrap();
+            let mut is_trend_bearish = true;
+            let mut candles_to_skip = trend_cfg.max_candle_skip;
+            for candle in candles {
+                if candle.low.clone().unwrap()._leq(&_low) {
+                    _low = candle.low.unwrap();
+                    candles_to_skip = trend_cfg.max_candle_skip;
+                    continue;
+                } else {
+                    candles_to_skip -= 1;
+                    if candles_to_skip < 0 {
+                        is_trend_bearish = false;
+                        break;
+                    }
                 }
             }
-        }
-        if candles_to_skip < trend_cfg.max_candle_skip {  // проверка чтобы последняя свеча была в тренде
-            is_trend_bearish = false;
-        }
+            if candles_to_skip < trend_cfg.max_candle_skip {  // проверка чтобы последняя свеча была в тренде
+                is_trend_bearish = false;
+            }
 
-        is_trend_bearish
+            is_trend_bearish
+        }
     }
 
     async fn is_trend_bullish(&self, trend_cfg: &TrendCfg, instrument_uid: &String, range: SizedRange) -> bool {
         let candles = self.get_candles(instrument_uid, range).await.unwrap();
 
-        let mut _high = candles.get(0).unwrap().clone().high.unwrap();
-        let mut is_trend_bullish = true;
-        let mut candles_to_skip = trend_cfg.max_candle_skip;
-        for candle in candles {
-            if candle.high.clone().unwrap()._geq(&_high) {
-                _high = candle.high.unwrap();
-                candles_to_skip = trend_cfg.max_candle_skip;
-                continue;
-            } else {
-                candles_to_skip -= 1;
-                if candles_to_skip < 0 {
-                    is_trend_bullish = false;
-                    break;
+        if candles.len() == 0 {
+            false
+        } else {
+            let mut _high = candles.get(0).unwrap().clone().high.unwrap();
+            let mut is_trend_bullish = true;
+            let mut candles_to_skip = trend_cfg.max_candle_skip;
+            for candle in candles {
+                if candle.high.clone().unwrap()._geq(&_high) {
+                    _high = candle.high.unwrap();
+                    candles_to_skip = trend_cfg.max_candle_skip;
+                    continue;
+                } else {
+                    candles_to_skip -= 1;
+                    if candles_to_skip < 0 {
+                        is_trend_bullish = false;
+                        break;
+                    }
                 }
             }
-        }
-        if candles_to_skip < trend_cfg.max_candle_skip {  // проверка чтобы последняя свеча была в тренде
-            is_trend_bullish = false;
-        }
+            if candles_to_skip < trend_cfg.max_candle_skip {  // проверка чтобы последняя свеча была в тренде
+                is_trend_bullish = false;
+            }
 
-        is_trend_bullish
+            is_trend_bullish
+        }
     }
 }

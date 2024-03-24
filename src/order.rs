@@ -27,7 +27,7 @@ pub struct OrderServiceSandboxImpl {
 }
 
 pub struct OrderServiceHistBoxImpl {
-    commission: Quotation,
+    commission: u8, // percentage 0-100
     balance: Quotation,
     // fixme map<instrument, Quotation> for multi instruments
     trash_hold: u64,
@@ -52,7 +52,7 @@ impl OrderServiceSandboxImpl {
 }
 
 impl OrderServiceHistBoxImpl {
-    pub fn new(balance: Quotation, commission: Quotation, trash_hold: u64) -> Self { Self { commission, balance, trash_hold } }
+    pub fn new(balance: Quotation, commission: u8, trash_hold: u64) -> Self { Self { commission, balance, trash_hold } }
     pub fn get_balance(&self) -> Quotation { self.balance.clone() }
 }
 
@@ -109,8 +109,10 @@ impl OrderService for OrderServiceHistBoxImpl {
             self.balance.units -= price.clone().unwrap().units * quantity;
             self.balance.nano -= price.clone().unwrap().nano * quantity as i32;
 
-            self.balance.units -= self.commission.units;
-            self.balance.nano -= self.commission.nano;
+            self.balance.units -= (price.clone().unwrap().units * quantity) * self.commission as i64;
+            self.balance.nano -= (price.clone().unwrap().nano * quantity as i32) * self.commission as i32;
+
+            print!("New balance after buy={},{}", self.balance.units, self.balance.nano);
 
             Ok(Response::new(PostOrderResponse {
                 order_id: "hist".to_string(),
@@ -127,8 +129,8 @@ impl OrderService for OrderServiceHistBoxImpl {
                 initial_commission: None,
                 executed_commission: Some(MoneyValue {
                     currency: "".to_string(),
-                    units: self.commission.units,
-                    nano: self.commission.nano,
+                    units: self.commission as i64,
+                    nano: 0,
                 }),
                 aci_value: None,
                 figi,
@@ -154,8 +156,10 @@ impl OrderService for OrderServiceHistBoxImpl {
             self.balance.units += price.clone().unwrap().units * quantity;
             self.balance.nano += price.clone().unwrap().nano * quantity as i32;
 
-            self.balance.units -= self.commission.units;
-            self.balance.nano -= self.commission.nano;
+            self.balance.units -= (price.clone().unwrap().units * quantity) * self.commission as i64;
+            self.balance.nano -= (price.clone().unwrap().nano * quantity as i32) * self.commission as i32;
+
+            print!("New balance after sell={},{}", self.balance.units, self.balance.nano);
 
             Ok(Response::new(PostOrderResponse {
                 order_id: "hist".to_string(),
@@ -172,8 +176,8 @@ impl OrderService for OrderServiceHistBoxImpl {
                 initial_commission: None,
                 executed_commission: Some(MoneyValue {
                     currency: "".to_string(),
-                    units: self.commission.units,
-                    nano: self.commission.nano,
+                    units: self.commission as i64,
+                    nano: 0,
                 }),
                 aci_value: None,
                 figi,
