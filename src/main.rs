@@ -1,9 +1,9 @@
 mod local_tokens;
 mod state;
-mod user;
+mod user_service;
 mod strategy;
-mod order;
-mod operations;
+mod order_service;
+mod operations_service;
 mod trading_cfg;
 
 use std::fs;
@@ -15,13 +15,13 @@ use tonic::{Streaming, transport::{Channel, ClientTlsConfig}};
 use tinkoff_invest_api::{TIResult, TinkoffInvestService};
 use tinkoff_invest_api::tcs::{Account, GetAccountsRequest, InstrumentsRequest, InstrumentStatus, MarketDataRequest, MarketDataResponse, Quotation, Share};
 use tokio::time;
-use crate::operations::{OperationsServiceSandBoxImpl, OperationsService};
-use crate::order::OrderServiceSandboxImpl;
+use crate::operations_service::{OperationsServiceSandBoxImpl, OperationsService};
+use crate::order_service::OrderServiceSandboxImpl;
 use crate::state::{run_updater_last_price, run_updater_candles};
 use crate::state::candle_state::{CandleState, CandleStateStatistic};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::state::state::State;
-use crate::user::{BrokerAccountSandboxImpl, BrokerAccountService};
+use crate::user_service::{BrokerAccountSandboxImpl, BrokerAccountService};
 
 
 async fn prepare_channel() -> TIResult<Channel> {
@@ -197,7 +197,7 @@ mod test {
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
     use reqwest::header::{AUTHORIZATION, HeaderValue};
     use zip::ZipArchive;
-    use crate::order::OrderServiceHistBoxImpl;
+    use crate::order_service::OrderServiceHistBoxImpl;
     use crate::strategy::hammer_strategy::HammerStrategy;
     use crate::strategy::strategy::Strategy;
     use crate::trading_cfg::{HammerCfg, HammerStrategySettings, TrendCfg};
@@ -356,24 +356,25 @@ mod test {
             trend_cfg: TrendCfg {
                 max_candle_skip: 1,
             },
-            window_size: 5,
+            window_size_min: 5,
         };
         let state = Arc::new(CandleState::new());
         let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone(), hammer_settings);
 
         let mut i = 0;
+        let now = std::time::Instant::now();
         for candle in sorted_stream {
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
             hammer_strategy.update().await.expect("Error updating first strategy");
             i += 1;
-            println!("i={}", i);
-            if i > 1000 { // 261933
+            if i > 10000 { // 261933 all
                 break
             }
         }
 
+        println!("Elapsed test time: {:.10?}", now.elapsed());
         println!("HammerStrategy for
           instruments={:?},
           year={:?}

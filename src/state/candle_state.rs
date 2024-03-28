@@ -15,6 +15,7 @@ pub struct SizedRange {
 }
 
 pub struct CandleState {
+    candles_1_by_day_time: RwLock<MultiMap<String, Candle>>, // todo partition by date-time
     candles_1_by_instrument_uid: RwLock<MultiMap<String, Candle>>,
     candles_5_by_instrument_uid: RwLock<MultiMap<String, Candle>>,
 }
@@ -53,6 +54,7 @@ impl SizedRange {
 impl State<Candle> for CandleState {
     fn new() -> Self {
         CandleState {
+            candles_1_by_day_time: RwLock::new(MultiMap::new()),
             candles_1_by_instrument_uid: RwLock::new(MultiMap::new()),
             candles_5_by_instrument_uid: RwLock::new(MultiMap::new()),
         }
@@ -92,12 +94,14 @@ impl CandleStateStatistic for CandleState {
         };
         match state {
             Some(state) => {
-                state.get_vec(instrument_uid).map(|candles| {
-                    candles.iter().filter(
-                        |&candle|
-                            range.start._leq(&candle.clone().time.unwrap()) && range.end._geq(&candle.clone().time.unwrap())
-                    ).cloned().collect::<Vec<_>>()
-                })
+                let candles = state.get_vec(instrument_uid).unwrap();
+                let mut answer = Vec::new();
+                for candle in candles {
+                    if range.start._leq(candle.time.as_ref().unwrap()) && range.end._geq(candle.time.as_ref().unwrap()) {
+                        answer.push(candle.clone());
+                    }
+                }
+                Some(answer)
             }
             None => None
         }

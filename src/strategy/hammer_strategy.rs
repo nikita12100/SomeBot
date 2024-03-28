@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{OrderType, PortfolioResponse, Quotation, Share, SubscriptionInterval};
-use crate::order::{OrderService, OrderServiceHistBoxImpl, OrderServiceSandboxImpl};
+use crate::order_service::{OrderService, OrderServiceHistBoxImpl, OrderServiceSandboxImpl};
 use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
 use crate::strategy::strategy::{OpenedPattern, Strategy};
 use crate::trading_cfg::HammerStrategySettings;
@@ -76,7 +76,7 @@ impl Strategy for HammerStrategy {
     async fn signal_buy(&self, stat: &Self::Statistic) -> Vec<OpenedPattern> {
         let mut to_buy = Vec::new();
         let window_time_end = SystemTime::now();
-        let window_time_start = window_time_end - Duration::from_secs(self.settings.window_size * 60);
+        let window_time_start = window_time_end - Duration::from_secs(self.settings.window_size_min * 60);
         let range = SizedRange::new_1m(Timestamp::from(window_time_start), Timestamp::from(window_time_end));
 
         let is_trend_bearish = stat.is_trend_bearish(&self.settings.trend_cfg, &self.instrument.uid, range).await;

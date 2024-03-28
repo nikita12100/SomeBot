@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 use tinkoff_invest_api::tcs::{OrderType, PortfolioResponse, Quotation, Share};
-use crate::order::{OrderService, OrderServiceSandboxImpl};
+use crate::order_service::{OrderService, OrderServiceSandboxImpl};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::strategy::strategy::{map_position_to_pattern, OpenedPattern, Strategy};
 

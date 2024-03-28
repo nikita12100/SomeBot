@@ -18,4 +18,5 @@ History training create folder `./hist_data`, then download zip file per (share,
 
 Вопросы:
  - выставлять заявки парой или нет?
+ - нужен механизм очистки state от старрых данных
 

@@ -18,7 +18,7 @@ pub struct HammerStrategySettings {
     pub hammer_cfg: HammerCfg,
     pub trend_cfg: TrendCfg,
     // как далеко мы смотрим назад при поиске паттерна при покупке
-    pub window_size: u64, // in minutes
+    pub window_size_min: u64, // in minutes
 }
 
 impl HammerCfg {
