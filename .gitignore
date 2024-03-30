@@ -2,5 +2,5 @@
 .idea
 .DS_Store
 Cargo.lock
-src/local_tokens.rs
+src/utils/local_tokens.rs
 /hist_data

@@ -1,11 +1,8 @@
-mod local_tokens;
 mod state;
-mod user_service;
 mod strategy;
-mod order_service;
-mod operations_service;
 mod trading_cfg;
 mod utils;
+mod service;
 
 use std::fs;
 use std::sync::Arc;
@@ -16,13 +13,14 @@ use tonic::{Streaming, transport::{Channel, ClientTlsConfig}};
 use tinkoff_invest_api::{TIResult, TinkoffInvestService};
 use tinkoff_invest_api::tcs::{Account, GetAccountsRequest, InstrumentsRequest, InstrumentStatus, MarketDataRequest, MarketDataResponse, Quotation, Share};
 use tokio::time;
-use crate::operations_service::{OperationsServiceSandBoxImpl, OperationsService};
-use crate::order_service::OrderServiceSandboxImpl;
+use crate::service::operations_service::{OperationsService, OperationsServiceSandBoxImpl};
+use crate::service::order_service::OrderServiceSandboxImpl;
+use crate::service::user_service::BrokerAccountSandboxImpl;
 use crate::state::{run_updater_last_price, run_updater_candles};
 use crate::state::candle_state::{CandleState, CandleStateStatistic};
 use crate::state::last_price_state::{LastPriceState, LastPriceStateStatistic};
 use crate::state::state::State;
-use crate::user_service::{BrokerAccountSandboxImpl, BrokerAccountService};
+use crate::utils::local_tokens;
 
 
 async fn prepare_channel() -> TIResult<Channel> {
@@ -146,7 +144,7 @@ mod test {
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
     use reqwest::header::{AUTHORIZATION, HeaderValue};
     use zip::ZipArchive;
-    use crate::order_service::OrderServiceHistBoxImpl;
+    use crate::service::order_service::OrderServiceHistBoxImpl;
     use crate::strategy::hammer_strategy::HammerStrategy;
     use crate::strategy::strategy::Strategy;
     use crate::trading_cfg::{HammerCfg, HammerStrategySettings, TrendCfg};

@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use mock_instant::SystemTime;
 use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{OrderType, PortfolioResponse, Quotation, Share, SubscriptionInterval};
-use crate::order_service::{OrderService, OrderServiceHistBoxImpl, OrderServiceSandboxImpl};
+use crate::service::order_service::{OrderService, OrderServiceHistBoxImpl};
 use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
 use crate::strategy::strategy::{OpenedPattern, Strategy};
 use crate::trading_cfg::HammerStrategySettings;
