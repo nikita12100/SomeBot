@@ -5,6 +5,7 @@ mod strategy;
 mod order_service;
 mod operations_service;
 mod trading_cfg;
+mod utils;
 
 use std::fs;
 use std::sync::Arc;
@@ -130,60 +131,7 @@ async fn print_states(last_price_state: Arc<LastPriceState>, candle_state: Arc<C
     }
 }
 
-trait Cmp<T> {
-    fn _le(&self, other: &T) -> bool;
-    fn _leq(&self, other: &T) -> bool;
-    fn _ge(&self, other: &T) -> bool;
-    fn _geq(&self, other: &T) -> bool;
-}
-
-impl Cmp<Timestamp> for Timestamp {
-    fn _le(&self, other: &Timestamp) -> bool {
-        self.seconds < other.seconds ||
-            (self.seconds == other.seconds && self.nanos < other.nanos)
-    }
-
-    fn _leq(&self, other: &Timestamp) -> bool {
-        self.seconds < other.seconds ||
-            (self.seconds == other.seconds && self.nanos < other.nanos) ||
-            self == other
-    }
-
-    fn _ge(&self, other: &Timestamp) -> bool {
-        self.seconds > other.seconds ||
-            (self.seconds == other.seconds && self.nanos > other.nanos)
-    }
-
-    fn _geq(&self, other: &Timestamp) -> bool {
-        self.seconds > other.seconds ||
-            (self.seconds == other.seconds && self.nanos > other.nanos) &&
-                self == other
-    }
-}
-
-impl Cmp<Quotation> for Quotation {
-    fn _le(&self, other: &Quotation) -> bool {
-        self.units < other.units ||
-            (self.units == other.units && self.nano < other.nano)
-    }
-
-    fn _leq(&self, other: &Quotation) -> bool {
-        self.units < other.units ||
-            (self.units == other.units && self.nano < other.nano) ||
-            self == other
-    }
-
-    fn _ge(&self, other: &Quotation) -> bool {
-        self.units > other.units ||
-            (self.units == other.units && self.nano > other.nano)
-    }
-
-    fn _geq(&self, other: &Quotation) -> bool {
-        self.units > other.units ||
-            (self.units == other.units && self.nano > other.nano) &&
-                self == other
-    }
-}
+// -------------------------------------- TEST --------------------------------------
 
 #[cfg(test)]
 mod test {
@@ -191,8 +139,9 @@ mod test {
     use std::error::Error;
     use std::io::{self, Read, Write};
     use std::fs::File;
-    use chrono::DateTime;
+    use chrono::{DateTime, TimeZone, Utc};
     use csv::{ReaderBuilder, StringRecord};
+    use mock_instant::{MockClock, SystemTime};
     use prost_types::Timestamp;
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
     use reqwest::header::{AUTHORIZATION, HeaderValue};
@@ -361,15 +310,20 @@ mod test {
         let state = Arc::new(CandleState::new());
         let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone(), hammer_settings);
 
+        // move systemTime to start of hist data in the past, because strategy use SystemTime::now
+        let first_candle_time = sorted_stream.get(0).unwrap().time.clone().unwrap();
+        MockClock::advance_system_time(Duration::from_secs(first_candle_time.seconds as u64));
+
         let mut i = 0;
         let now = std::time::Instant::now();
         for candle in sorted_stream {
+            MockClock::advance_system_time(Duration::from_secs(60)); // increment mock_instant::SystemTime
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
             hammer_strategy.update().await.expect("Error updating first strategy");
             i += 1;
-            if i > 10000 { // 261933 all
+            if i > 100 { // 261933 all
                 break
             }
         }

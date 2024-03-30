@@ -3,9 +3,9 @@ use std::error::Error;
 use std::sync::RwLock;
 use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{Candle, SubscriptionInterval};
-use crate::Cmp;
 use crate::state::state::State;
 use crate::trading_cfg::{HammerCfg, TrendCfg};
+use crate::utils::cmp::Cmp;
 
 #[derive(Debug, Clone)]
 pub struct SizedRange {
@@ -97,10 +97,16 @@ impl CandleStateStatistic for CandleState {
                 let candles = state.get_vec(instrument_uid).unwrap();
                 let mut answer = Vec::new();
                 for candle in candles {
+                    // range.start <= candle.time <= range.end
                     if range.start._leq(candle.time.as_ref().unwrap()) && range.end._geq(candle.time.as_ref().unwrap()) {
                         answer.push(candle.clone());
                     }
+                    println!("false range.start={}", range.start);
+                    println!("false candle.time={}", candle.time.clone().unwrap());
+                    println!("false range.end={}", range.end);
+                    println!("false len={}", answer.len());
                 }
+                println!("answer len={}", answer.len());
                 Some(answer)
             }
             None => None
