@@ -1,11 +1,14 @@
 use multimap::MultiMap;
 use std::error::Error;
+use std::fmt::format;
 use std::sync::RwLock;
 use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{Candle, SubscriptionInterval};
 use crate::state::state::State;
 use crate::trading_cfg::{HammerCfg, TrendCfg};
+use crate::utils::candle::CandleExtension;
 use crate::utils::cmp::Cmp;
+use crate::utils::quotation::QuotationExtension;
 
 #[derive(Debug, Clone)]
 pub struct SizedRange {
@@ -15,7 +18,8 @@ pub struct SizedRange {
 }
 
 pub struct CandleState {
-    candles_1_by_day_time: RwLock<MultiMap<String, Candle>>, // todo partition by date-time
+    candles_1_by_day_time: RwLock<MultiMap<String, Candle>>,
+    // todo partition by date-time
     candles_1_by_instrument_uid: RwLock<MultiMap<String, Candle>>,
     candles_5_by_instrument_uid: RwLock<MultiMap<String, Candle>>,
 }
@@ -96,17 +100,15 @@ impl CandleStateStatistic for CandleState {
             Some(state) => {
                 let candles = state.get_vec(instrument_uid).unwrap();
                 let mut answer = Vec::new();
-                for candle in candles {
+                // мы смотрим от текущего времени в прошлое, поэтому оптимальнее идти с конца
+                for candle in candles.iter().rev() {
                     // range.start <= candle.time <= range.end
                     if range.start._leq(candle.time.as_ref().unwrap()) && range.end._geq(candle.time.as_ref().unwrap()) {
                         answer.push(candle.clone());
+                    } else {
+                        break;
                     }
-                    println!("false range.start={}", range.start);
-                    println!("false candle.time={}", candle.time.clone().unwrap());
-                    println!("false range.end={}", range.end);
-                    println!("false len={}", answer.len());
                 }
-                println!("answer len={}", answer.len());
                 Some(answer)
             }
             None => None
@@ -114,17 +116,11 @@ impl CandleStateStatistic for CandleState {
     }
 
     async fn is_hammer_bullish(&self, hammer_cfg: &HammerCfg, candle: Candle) -> bool {
-        let open = candle.open.unwrap().units;
-        let close = candle.close.unwrap().units;
-        let high = candle.high.unwrap().units;
-        let low = candle.low.unwrap().units;
-
-        let open_prc = (((open - low.clone()) as f64 / (high - low.clone()) as f64) * 100.0).round() as u8;
-        let close_prc = (((close - low.clone()) as f64 / (high.clone() - close.clone()) as f64) * 100.0).round() as u8;
-
-        if close > open {
+        if candle.is_bullish() {
+            let open_prc = candle.percentage_open();
+            let close_prc = candle.percentage_close();
             if open_prc >= hammer_cfg.bottom_start && open_prc <= hammer_cfg.bottom_end &&
-                close_prc >= hammer_cfg.up_start && open_prc <= hammer_cfg.up_end {
+                close_prc >= hammer_cfg.up_start && close_prc <= hammer_cfg.up_end {
                 true
             } else {
                 false
@@ -135,17 +131,11 @@ impl CandleStateStatistic for CandleState {
     }
 
     async fn is_hammer_bearish(&self, hammer_cfg: &HammerCfg, candle: Candle) -> bool {
-        let open = candle.open.unwrap().units;
-        let close = candle.close.unwrap().units;
-        let high = candle.high.unwrap().units;
-        let low = candle.low.unwrap().units;
-
-        let open_prc = (((open - low.clone()) as f64 / (high - low.clone()) as f64) * 100.0).round() as u8;
-        let close_prc = (((close - low.clone()) as f64 / (high.clone() - close.clone()) as f64) * 100.0).round() as u8;
-
-        if open > close {
+        if candle.is_bearish() {
+            let open_prc = candle.percentage_open();
+            let close_prc = candle.percentage_close();
             if close_prc >= hammer_cfg.bottom_start && close_prc <= hammer_cfg.bottom_end &&
-                open_prc >= hammer_cfg.up_start && open_prc <= hammer_cfg.up_end {
+                open_prc >= hammer_cfg.up_start && close_prc <= hammer_cfg.up_end {
                 true
             } else {
                 false
@@ -163,7 +153,7 @@ impl CandleStateStatistic for CandleState {
         let mut is_trend_flat = true;
         let mut candles_to_skip = trend_cfg.max_candle_skip;
         for candle in candles {
-            if _low._leq(&candle.low.unwrap()) && _high._geq(&candle.high.unwrap()) {
+            if _low.wr() <= candle.low.unwrap().wr() && _high.wr() >= candle.high.unwrap().wr() {
                 candles_to_skip = trend_cfg.max_candle_skip;
                 continue;
             } else {
@@ -191,7 +181,7 @@ impl CandleStateStatistic for CandleState {
             let mut is_trend_bearish = true;
             let mut candles_to_skip = trend_cfg.max_candle_skip;
             for candle in candles {
-                if candle.low.clone().unwrap()._leq(&_low) {
+                if candle.low.clone().unwrap().wr() <= _low.wr() {
                     _low = candle.low.unwrap();
                     candles_to_skip = trend_cfg.max_candle_skip;
                     continue;
@@ -221,7 +211,7 @@ impl CandleStateStatistic for CandleState {
             let mut is_trend_bullish = true;
             let mut candles_to_skip = trend_cfg.max_candle_skip;
             for candle in candles {
-                if candle.high.clone().unwrap()._geq(&_high) {
+                if candle.high.clone().unwrap().wr() >= _high.wr() {
                     _high = candle.high.unwrap();
                     candles_to_skip = trend_cfg.max_candle_skip;
                     continue;

@@ -100,19 +100,22 @@ impl OrderService for OrderServiceHistBoxImpl {
         if self.balance.units < self.trash_hold as i64 {
             panic!("Strategy lost: trying buy when balance:{:?} < trash_hold:{:?}", self.balance.units, self.trash_hold)
         }
-        if self.balance.units > 0 && self.balance.nano > 0 &&
+        if self.balance.units > 0 && self.balance.nano >= 0 &&
             price.is_some() && quantity > 0 &&
             self.balance.units - price.clone().unwrap().units * quantity > 0 &&
-            self.balance.nano - price.clone().unwrap().nano * quantity as i32 > 0 &&
             price.clone().unwrap().units > 0 &&
-            price.clone().unwrap().nano > 0 {
-            self.balance.units -= price.clone().unwrap().units * quantity;
-            self.balance.nano -= price.clone().unwrap().nano * quantity as i32;
+            price.clone().unwrap().nano >= 0 {
 
-            self.balance.units -= (price.clone().unwrap().units * quantity) * self.commission as i64;
-            self.balance.nano -= (price.clone().unwrap().nano * quantity as i32) * self.commission as i32;
+            let commission = (self.commission + 100 )/ 100;
+            self.balance.units -= (price.clone().unwrap().units * quantity) * commission as i64;
+            self.balance.nano -= (price.clone().unwrap().nano * (quantity as i32)) * commission as i32; // переполнение
 
-            print!("New balance after buy={},{}", self.balance.units, self.balance.nano);
+            if self.balance.nano < 0 {
+                self.balance.units -= 1;
+                self.balance.nano += 1000000000;
+            }
+
+            println!(" ======================== New balance after buy={},{} ========================", self.balance.units, self.balance.nano);
 
             Ok(Response::new(PostOrderResponse {
                 order_id: "hist".to_string(),
@@ -144,7 +147,7 @@ impl OrderService for OrderServiceHistBoxImpl {
         } else {
             Err(Status::new(
                 Code::Cancelled,
-                format!("Not enough money while buying instrument_id={:?}, quantity={:?}, price={:?} ", instrument_id, quantity, price),
+                format!("Not enough money balance={:?} while buying instrument_id={:?}, quantity={:?}, price={:?} ", self.balance, instrument_id, quantity, price),
             ))
         }
     }

@@ -20,4 +20,5 @@ History training create folder `./hist_data`, then download zip file per (share,
  - В исторических данных надо использовать `use mock_instant::SystemTime`, в песочнице и проде `std::time::SystemTime`.
  - выставлять заявки парой или нет?
  - нужен механизм очистки state от старрых данных
+ - проверить арифметику на quotation
 

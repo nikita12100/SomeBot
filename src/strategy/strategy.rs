@@ -1,6 +1,4 @@
-use std::cmp::Ordering;
 use tinkoff_invest_api::tcs::{PortfolioPosition, PortfolioResponse, Quotation, Share};
-use prost_types::Timestamp;
 
 pub trait Strategy {
     type Statistic;

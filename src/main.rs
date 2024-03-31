@@ -148,20 +148,7 @@ mod test {
     use crate::strategy::hammer_strategy::HammerStrategy;
     use crate::strategy::strategy::Strategy;
     use crate::trading_cfg::{HammerCfg, HammerStrategySettings, TrendCfg};
-
-    fn read_quotation(data: &str) -> Quotation {
-        let mut splited = data.split(".");
-        Quotation {
-            units: splited.next().unwrap().parse::<i64>().unwrap(),
-            nano: match splited.next().get_or_insert("0").parse::<i64>() {
-                Ok(x) => x as i32,
-                _ => {
-                    println!("Error while parsing nano in data={:#?}", data);
-                    0
-                }
-            },
-        }
-    }
+    use crate::utils::quotation::QuotationExtension;
 
     fn read_candle(row: StringRecord, interval: SubscriptionInterval) -> Candle {
         let mut data = row.get(0).unwrap().split(";");
@@ -176,10 +163,11 @@ mod test {
                 None
             }
         };
-        let open = read_quotation(data.next().unwrap());
-        let close = read_quotation(data.next().unwrap());
-        let high = read_quotation(data.next().unwrap());
-        let low = read_quotation(data.next().unwrap());
+
+        let open = <Quotation as QuotationExtension>::from_str(data.next().unwrap());
+        let close = <Quotation as QuotationExtension>::from_str(data.next().unwrap());
+        let high = <Quotation as QuotationExtension>::from_str(data.next().unwrap());
+        let low = <Quotation as QuotationExtension>::from_str(data.next().unwrap());
         let volume = data.next().unwrap();
         Candle {
             figi: instrument_uid.clone(),
@@ -295,10 +283,10 @@ mod test {
 
         let hammer_settings = HammerStrategySettings {
             hammer_cfg: HammerCfg {
-                bottom_start: 80,
-                bottom_end: 95,
-                up_start: 60,
-                up_end: 75,
+                bottom_start: 50,
+                bottom_end: 70,
+                up_start: 80,
+                up_end: 100,
             },
             trend_cfg: TrendCfg {
                 max_candle_skip: 1,
@@ -308,20 +296,18 @@ mod test {
         let state = Arc::new(CandleState::new());
         let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone(), hammer_settings);
 
-        // move systemTime to start of hist data in the past, because strategy use SystemTime::now
-        let first_candle_time = sorted_stream.get(0).unwrap().time.clone().unwrap();
-        MockClock::advance_system_time(Duration::from_secs(first_candle_time.seconds as u64));
-
         let mut i = 0;
         let now = std::time::Instant::now();
         for candle in sorted_stream {
-            MockClock::advance_system_time(Duration::from_secs(60)); // increment mock_instant::SystemTime
+            MockClock::set_system_time(Duration::from_secs(candle.time.clone().unwrap().seconds as u64));
+            MockClock::advance_system_time(Duration::from_secs(60));
+
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
             hammer_strategy.update().await.expect("Error updating first strategy");
             i += 1;
-            if i > 100 { // 261933 all
+            if i > 10000 { // 261933 all
                 break
             }
         }

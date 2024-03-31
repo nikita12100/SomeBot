@@ -9,6 +9,7 @@ use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{OrderType, PortfolioResponse, Quotation, Share, SubscriptionInterval};
 use crate::service::order_service::{OrderService, OrderServiceHistBoxImpl};
 use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
+use crate::state::last_price_state::LastPriceState;
 use crate::strategy::strategy::{OpenedPattern, Strategy};
 use crate::trading_cfg::HammerStrategySettings;
 use crate::utils::wrapper_mock_system_time::WrapperMockSystemTime;
@@ -43,6 +44,7 @@ impl Strategy for HammerStrategy {
         let orders_to_buy = self.signal_buy(&self.statistic).await;
         let orders_to_sell = self.signal_sell(&self.statistic).await;
         for order in orders_to_buy {
+            println!("aer order={:#?}", order);
             let order_response = self.order_service.order_buy(
                 order.figi.clone(),
                 order.instrument_id.clone(),
@@ -54,7 +56,7 @@ impl Strategy for HammerStrategy {
                 Ok(_) => {
                     self.opened_patterns.push(order);
                 }
-                _ => eprint!("Error in orders_to_buy")
+                Err(e) => eprintln!("Error in orders_to_buy: {}", e.message())
             }
         }
         let mut closed_orders_index = Vec::new();
@@ -97,22 +99,17 @@ impl Strategy for HammerStrategy {
             to_buy.push(OpenedPattern {
                 figi: self.instrument.figi.clone(),
                 quantity: 1, // fixme more quantity if it's more powerful signal
-                price_open: None,
+                price_open: Some(Quotation { // todo it need just for hist training
+                    units: last_candle.close.clone().unwrap().units,
+                    nano: last_candle.close.clone().unwrap().nano,
+                }),
                 price_close: Some(Quotation {
                     units: last_candle.high.clone().unwrap().units + (last_candle.high.clone().unwrap().units - last_candle.low.clone().unwrap().units) * 2,
-                    nano: 0,
-                }
-                ), // fixme define close price
+                    nano: last_candle.high.clone().unwrap().nano + (last_candle.high.clone().unwrap().nano - last_candle.low.clone().unwrap().nano) * 20,
+                }), // fixme define close price
                 instrument_id: self.instrument.uid.clone(),
             });
         }
-        println!("-------------------------------------------");
-        // println!("signal_buy window_time_end ={:?}", window_time_end);
-        // println!("signal_buy window_time_start ={:?}", window_time_start);
-        println!("signal_buy is_trend_bearish ={:?}", is_trend_bearish);
-        println!("signal_buy is_hammer_bullish ={:?}", is_hammer_bullish);
-        println!("signal_buy to_buy ={:?}", to_buy);
-        println!("-------------------------------------------");
         to_buy
     }
 
@@ -125,7 +122,7 @@ impl Strategy for HammerStrategy {
         let mut close_request = Vec::new();
         let last_candle = stat.get_last_candle(&self.instrument.uid, SubscriptionInterval::OneMinute).await.unwrap();
         let last_price = last_candle.close.unwrap().units.min(last_candle.open.unwrap().units);
-        for order in self.opened_patterns.clone() {
+        for order in &self.opened_patterns {
             if last_price > order.clone().price_close.unwrap().units {
                 close_request.push(order.clone());
             }

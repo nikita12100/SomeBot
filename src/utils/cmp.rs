@@ -31,27 +31,3 @@ impl Cmp<Timestamp> for Timestamp {
                 self == other
     }
 }
-
-impl Cmp<Quotation> for Quotation {
-    fn _le(&self, other: &Quotation) -> bool {
-        self.units < other.units ||
-            (self.units == other.units && self.nano < other.nano)
-    }
-
-    fn _leq(&self, other: &Quotation) -> bool {
-        self.units < other.units ||
-            (self.units == other.units && self.nano < other.nano) ||
-            self == other
-    }
-
-    fn _ge(&self, other: &Quotation) -> bool {
-        self.units > other.units ||
-            (self.units == other.units && self.nano > other.nano)
-    }
-
-    fn _geq(&self, other: &Quotation) -> bool {
-        self.units > other.units ||
-            (self.units == other.units && self.nano > other.nano) &&
-                self == other
-    }
-}
