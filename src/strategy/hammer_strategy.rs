@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 #[cfg(not(test))]
 use std::time::SystemTime;
@@ -12,11 +12,13 @@ use crate::state::candle_state::{CandleState, CandleStateStatistic, SizedRange};
 use crate::state::last_price_state::LastPriceState;
 use crate::strategy::strategy::{OpenedPattern, Strategy};
 use crate::trading_cfg::HammerStrategySettings;
+use crate::utils::candle::CandleExtension;
+use crate::utils::quotation::QuotationExtension;
 use crate::utils::wrapper_mock_system_time::WrapperMockSystemTime;
 
 pub struct HammerStrategy {
     statistic: Arc<CandleState>,
-    order_service: OrderServiceHistBoxImpl,
+    order_service: Arc<RwLock<OrderServiceHistBoxImpl>>, // Arc<RwLock<>> just for hist training
     instrument: Share,
     opened_patterns: Vec<OpenedPattern>,
     settings: HammerStrategySettings,
@@ -25,7 +27,7 @@ pub struct HammerStrategy {
 impl HammerStrategy {
     pub fn new(
         statistic: Arc<CandleState>,
-        order_service: OrderServiceHistBoxImpl,
+        order_service: Arc<RwLock<OrderServiceHistBoxImpl>>,
         instrument: Share,
         settings: HammerStrategySettings,
     ) -> Self {
@@ -43,13 +45,14 @@ impl Strategy for HammerStrategy {
     async fn update(&mut self) -> Result<(), Box<dyn Error>> {
         let orders_to_buy = self.signal_buy(&self.statistic).await;
         let orders_to_sell = self.signal_sell(&self.statistic).await;
+        let mut _order_service = self.order_service.write().unwrap();
         for order in orders_to_buy {
             println!("aer order={:#?}", order);
-            let order_response = self.order_service.order_buy(
+            let order_response = _order_service.order_buy(
                 order.figi.clone(),
                 order.instrument_id.clone(),
                 order.quantity.clone(),
-                order.price_open.clone(),
+                None,
                 OrderType::Market,
             ).await;
             match order_response {
@@ -61,11 +64,11 @@ impl Strategy for HammerStrategy {
         }
         let mut closed_orders_index = Vec::new();
         for order in orders_to_sell {
-            let closed_order = self.order_service.order_sell(
+            let closed_order = _order_service.order_sell(
                 order.figi.clone(),
                 order.instrument_id.clone(),
                 order.quantity.clone(),
-                order.price_close.clone(),
+                None,
                 OrderType::Market,
             ).await;
             if closed_order.is_ok() {
@@ -96,17 +99,12 @@ impl Strategy for HammerStrategy {
         let last_candle = stat.get_last_candle(&self.instrument.uid, SubscriptionInterval::OneMinute).await.unwrap();
         let is_hammer_bullish = stat.is_hammer_bullish(&self.settings.hammer_cfg, last_candle.clone()).await;
         if is_trend_bearish && is_hammer_bullish {
+            let close_price = (last_candle.high.clone().unwrap().wr() + (last_candle.high.clone().unwrap().wr() - last_candle.low.clone().unwrap().wr()) * 2).uwr();
             to_buy.push(OpenedPattern {
                 figi: self.instrument.figi.clone(),
                 quantity: 1, // fixme more quantity if it's more powerful signal
-                price_open: Some(Quotation { // todo it need just for hist training
-                    units: last_candle.close.clone().unwrap().units,
-                    nano: last_candle.close.clone().unwrap().nano,
-                }),
-                price_close: Some(Quotation {
-                    units: last_candle.high.clone().unwrap().units + (last_candle.high.clone().unwrap().units - last_candle.low.clone().unwrap().units) * 2,
-                    nano: last_candle.high.clone().unwrap().nano + (last_candle.high.clone().unwrap().nano - last_candle.low.clone().unwrap().nano) * 20,
-                }), // fixme define close price
+                price_open: None,
+                price_close: Some(close_price),
                 instrument_id: self.instrument.uid.clone(),
             });
         }
@@ -121,9 +119,13 @@ impl Strategy for HammerStrategy {
     async fn signal_sell(&self, stat: &Self::Statistic) -> Vec<OpenedPattern> {
         let mut close_request = Vec::new();
         let last_candle = stat.get_last_candle(&self.instrument.uid, SubscriptionInterval::OneMinute).await.unwrap();
-        let last_price = last_candle.close.unwrap().units.min(last_candle.open.unwrap().units);
+        let last_price = if last_candle.is_bullish() {
+            last_candle.close.unwrap()
+        } else {
+            last_candle.open.unwrap()
+        };
         for order in &self.opened_patterns {
-            if last_price > order.clone().price_close.unwrap().units {
+            if last_price.wr() > order.clone().price_close.unwrap().wr() {
                 close_request.push(order.clone());
             }
         }

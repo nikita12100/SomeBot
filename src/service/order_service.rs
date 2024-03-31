@@ -1,6 +1,5 @@
-use std::fmt::format;
 use tinkoff_invest_api::DefaultInterceptor;
-use tinkoff_invest_api::tcs::{Account, GetOrdersRequest, GetOrdersResponse, MoneyValue, OrderDirection, OrderState, OrderType, PostOrderRequest, PostOrderResponse, Quotation, SandboxPayInRequest, Share};
+use tinkoff_invest_api::tcs::{Account, GetOrdersRequest, LastPrice, MoneyValue, OrderDirection, OrderState, OrderType, PostOrderRequest, PostOrderResponse, Quotation, SandboxPayInRequest};
 use tinkoff_invest_api::tcs::orders_service_client::OrdersServiceClient;
 use tinkoff_invest_api::tcs::sandbox_service_client::SandboxServiceClient;
 use tonic::codegen::InterceptedService;
@@ -8,11 +7,11 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 use duplicate::duplicate_item;
 use tonic::{Code, Response, Status};
-use crate::strategy::strategy::OpenedPattern;
+use crate::utils::quotation::QuotationExtension;
 
 pub trait OrderService {
-    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status>;
-    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status>;
+    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status>;
+    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status>;
     async fn get_orders(&mut self) -> Vec<OrderState>;
 }
 
@@ -27,10 +26,12 @@ pub struct OrderServiceSandboxImpl {
 }
 
 pub struct OrderServiceHistBoxImpl {
-    commission: u8, // percentage 0-100
-    balance: Quotation,
+    commission: u8,
+    // percentage 0-100
+    pub balance: Quotation,
     // fixme map<instrument, Quotation> for multi instruments
     trash_hold: u64,
+    pub current_price: Quotation,
 }
 
 impl OrderServiceImpl {
@@ -52,7 +53,7 @@ impl OrderServiceSandboxImpl {
 }
 
 impl OrderServiceHistBoxImpl {
-    pub fn new(balance: Quotation, commission: u8, trash_hold: u64) -> Self { Self { commission, balance, trash_hold } }
+    pub fn new(balance: Quotation, commission: u8, trash_hold: u64) -> Self { Self { commission, balance, trash_hold, current_price: Quotation { units: 0, nano: 0 } } }
     pub fn get_balance(&self) -> Quotation { self.balance.clone() }
 }
 
@@ -62,7 +63,7 @@ service_impl                 _post_order             _get_orders;
 [ OrderServiceSandboxImpl ]  [ post_sandbox_order ]  [ get_sandbox_orders ];
 )]
 impl OrderService for service_impl {
-    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status> {
+    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
         self.client._post_order(PostOrderRequest {
             figi: figi,
             quantity: quantity,
@@ -75,7 +76,7 @@ impl OrderService for service_impl {
         }).await
     }
 
-    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<tonic::Response<PostOrderResponse>, tonic::Status> {
+    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
         self.client._post_order(PostOrderRequest {
             figi: figi,
             quantity: quantity,
@@ -96,23 +97,28 @@ impl OrderService for service_impl {
 }
 
 impl OrderService for OrderServiceHistBoxImpl {
-    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
+    async fn order_buy(&mut self, figi: String, instrument_id: String, quantity: i64, _price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
         if self.balance.units < self.trash_hold as i64 {
             panic!("Strategy lost: trying buy when balance:{:?} < trash_hold:{:?}", self.balance.units, self.trash_hold)
         }
-        if self.balance.units > 0 && self.balance.nano >= 0 &&
-            price.is_some() && quantity > 0 &&
-            self.balance.units - price.clone().unwrap().units * quantity > 0 &&
-            price.clone().unwrap().units > 0 &&
-            price.clone().unwrap().nano >= 0 {
+        if self.balance.units > 0 && self.balance.nano >= 0 && quantity > 0 {
+            let price = if _price.is_some() || order_type != OrderType::Market {
+                panic!("Only market order support in hist order service")
+            } else {
+                self.current_price.clone()
+            };
 
-            let commission = (self.commission + 100 )/ 100;
-            self.balance.units -= (price.clone().unwrap().units * quantity) * commission as i64;
-            self.balance.nano -= (price.clone().unwrap().nano * (quantity as i32)) * commission as i32; // переполнение
+            if self.balance.units - price.clone().units * quantity < 0 {
+                panic!("Not enough money for buy: balance={:#?}, price={:#?}", self.balance, price)
+            }
 
-            if self.balance.nano < 0 {
+            self.balance = (self.balance.wr() - price.clone().wr() * quantity).uwr();
+            let commission = (self.commission as f64 / 100.0) as i64;
+            self.balance = (self.balance.wr() - price.clone().wr() * quantity * commission).uwr();
+
+            while self.balance.nano < 0 {
                 self.balance.units -= 1;
-                self.balance.nano += 1000000000;
+                self.balance.nano += 1_000_000_000;
             }
 
             println!(" ======================== New balance after buy={},{} ========================", self.balance.units, self.balance.nano);
@@ -125,8 +131,8 @@ impl OrderService for OrderServiceHistBoxImpl {
                 initial_order_price: None,
                 executed_order_price: Some(MoneyValue {
                     currency: "".to_string(),
-                    units: price.clone().unwrap().units,
-                    nano: price.clone().unwrap().nano,
+                    units: price.clone().units,
+                    nano: price.clone().nano,
                 }),
                 total_order_amount: None,
                 initial_commission: None,
@@ -147,22 +153,25 @@ impl OrderService for OrderServiceHistBoxImpl {
         } else {
             Err(Status::new(
                 Code::Cancelled,
-                format!("Not enough money balance={:?} while buying instrument_id={:?}, quantity={:?}, price={:?} ", self.balance, instrument_id, quantity, price),
+                format!("Not enough money balance={:?} while buying instrument_id={:?}, quantity={:?}, price={:?} ", self.balance, instrument_id, quantity, _price),
             ))
         }
     }
 
-    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
-        if price.is_some() && quantity > 0 &&
-            price.clone().unwrap().units > 0 &&
-            price.clone().unwrap().nano > 0 {
-            self.balance.units += price.clone().unwrap().units * quantity;
-            self.balance.nano += price.clone().unwrap().nano * quantity as i32;
+    async fn order_sell(&mut self, figi: String, instrument_id: String, quantity: i64, _price: Option<Quotation>, order_type: OrderType) -> Result<Response<PostOrderResponse>, Status> {
+        if quantity > 0 {
 
-            self.balance.units -= (price.clone().unwrap().units * quantity) * self.commission as i64;
-            self.balance.nano -= (price.clone().unwrap().nano * quantity as i32) * self.commission as i32;
+            let price = if _price.is_some() || order_type != OrderType::Market {
+                panic!("Only market order support in hist order service")
+            } else {
+                self.current_price.clone()
+            };
 
-            print!("New balance after sell={},{}", self.balance.units, self.balance.nano);
+            self.balance = (self.balance.wr() + price.clone().wr() * quantity).uwr();
+            let commission = (self.commission as f64 / 100.0) as i64;
+            self.balance = (self.balance.wr() - price.clone().wr() * quantity * commission).uwr();
+
+            println!(" ======================== New balance after sell={},{} ========================", self.balance.units, self.balance.nano);
 
             Ok(Response::new(PostOrderResponse {
                 order_id: "hist".to_string(),
@@ -172,8 +181,8 @@ impl OrderService for OrderServiceHistBoxImpl {
                 initial_order_price: None,
                 executed_order_price: Some(MoneyValue {
                     currency: "".to_string(),
-                    units: price.clone().unwrap().units,
-                    nano: price.clone().unwrap().nano,
+                    units: price.clone().units,
+                    nano: price.clone().nano,
                 }),
                 total_order_amount: None,
                 initial_commission: None,
@@ -194,7 +203,7 @@ impl OrderService for OrderServiceHistBoxImpl {
         } else {
             Err(Status::new(
                 Code::Cancelled,
-                format!("Incorrect price while selling instrument_id={:?}, quantity={:?}, price={:?} ", instrument_id, quantity, price),
+                format!("Incorrect price while selling instrument_id={:?}, quantity={:?}, price={:?} ", instrument_id, quantity, _price),
             ))
         }
     }

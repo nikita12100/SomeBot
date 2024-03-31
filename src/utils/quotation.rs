@@ -9,6 +9,10 @@ pub struct QuotationWrapper {
     q: Quotation,
 }
 
+impl QuotationWrapper {
+    pub fn uwr(&self) -> Quotation { self.q.clone() }
+}
+
 pub trait QuotationExtension {
     fn wr(&self) -> QuotationWrapper;
     fn to_f(&self) -> f64;
@@ -27,7 +31,7 @@ impl QuotationExtension for Quotation {
         let f: f64 = str.parse().unwrap();
         Quotation {
             units: f.trunc() as i64,
-            nano: (f.fract() * 1000000000.0) as i32,
+            nano: (f.fract() * 1_000_000_000.0) as i32,
         }
     }
 }
@@ -107,10 +111,45 @@ impl Sub for QuotationWrapper {
     }
 }
 
+impl Mul<i64> for QuotationWrapper {
+    type Output = Self;
+
+    fn mul(self, multiplayer: i64) -> Self {
+        let (nano, carry) = match self.q.nano.checked_mul(multiplayer as i32) {
+            Some(res) => (res, 0_i64),
+            None => {
+                let mut nano = self.q.nano as i64 * multiplayer;
+                let mut carry = 0;
+                while nano > i32::MAX as i64 {
+                    nano -= i32::MAX as i64;
+                    carry += 1;
+                }
+                (nano as i32, carry)
+            }
+        };
+        QuotationWrapper {
+            q: Quotation {
+                units: self.q.units * multiplayer + carry,
+                nano,
+            },
+        }
+    }
+}
+
+// New balance after sell=7704,1428383980
 #[cfg(test)]
 mod test {
     use tinkoff_invest_api::tcs::Quotation;
     use crate::utils::quotation::QuotationExtension;
+
+    #[test]
+    fn test_cmp() {
+        let x_1 = Quotation { units: 140, nano: 620000000 };
+        let y_1 = Quotation { units: 140, nano: 840000000 };
+        assert_eq!(x_1.wr() > y_1.wr(), false);
+        assert_eq!(x_1.wr() < y_1.wr(), true);
+        assert_eq!(x_1.wr() == y_1.wr(), false);
+    }
 
     #[test]
     fn to_f_test() {

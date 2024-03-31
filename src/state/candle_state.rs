@@ -1,6 +1,5 @@
 use multimap::MultiMap;
 use std::error::Error;
-use std::fmt::format;
 use std::sync::RwLock;
 use prost_types::Timestamp;
 use tinkoff_invest_api::tcs::{Candle, SubscriptionInterval};

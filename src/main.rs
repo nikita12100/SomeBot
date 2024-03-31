@@ -137,10 +137,12 @@ mod test {
     use std::error::Error;
     use std::io::{self, Read, Write};
     use std::fs::File;
+    use std::sync::RwLock;
     use chrono::{DateTime, TimeZone, Utc};
     use csv::{ReaderBuilder, StringRecord};
     use mock_instant::{MockClock, SystemTime};
     use prost_types::Timestamp;
+    use rand::Rng;
     use tinkoff_invest_api::tcs::{Candle, Quotation, SubscriptionInterval};
     use reqwest::header::{AUTHORIZATION, HeaderValue};
     use zip::ZipArchive;
@@ -260,6 +262,30 @@ mod test {
         Ok(candles)
     }
 
+    fn generate_random_price(candle: &Candle) -> Quotation {
+        let mut rng = rand::thread_rng();
+
+        let units = if candle.open.clone().unwrap().units == candle.close.clone().unwrap().units {
+            candle.open.clone().unwrap().units
+        } else {
+            rng.gen_range(
+                candle.open.clone().unwrap().units.min(candle.close.clone().unwrap().units)
+                    ..
+                    candle.open.clone().unwrap().units.max(candle.close.clone().unwrap().units)
+            )
+        };
+        let nano = if candle.open.clone().unwrap().nano == candle.close.clone().unwrap().nano {
+            candle.open.clone().unwrap().nano
+        } else {
+            rng.gen_range(
+                candle.open.clone().unwrap().nano.min(candle.close.clone().unwrap().nano)
+                    ..
+                    candle.open.clone().unwrap().nano.max(candle.close.clone().unwrap().nano)
+            )
+        };
+        Quotation { units, nano }
+    }
+
     #[tokio::test]
     async fn test_hammer_strategy() {
         let (_, sandbox_token) = local_tokens::get_local_tokens();
@@ -276,10 +302,10 @@ mod test {
         println!("stream_len={:#?}", sorted_stream.len());
         // todo cross validation like a lot of slices from sorted_stream: sorted_stream[x..y]
 
-        let start_balance = Quotation { units: 1000, nano: 0 };
+        let start_balance = Quotation { units: 10000, nano: 0 };
         let commission = 30_u8; // percentage
         let trash_hold = 100_u64;
-        let order_service_mock = OrderServiceHistBoxImpl::new(start_balance.clone(), commission, trash_hold);
+        let order_service_mock = Arc::new(RwLock::new(OrderServiceHistBoxImpl::new(start_balance.clone(), commission, trash_hold)));
 
         let hammer_settings = HammerStrategySettings {
             hammer_cfg: HammerCfg {
@@ -294,7 +320,7 @@ mod test {
             window_size_min: 5,
         };
         let state = Arc::new(CandleState::new());
-        let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), order_service_mock, instruments.get(0).unwrap().clone(), hammer_settings);
+        let mut hammer_strategy = HammerStrategy::new(Arc::clone(&state), Arc::clone(&order_service_mock), instruments.get(0).unwrap().clone(), hammer_settings);
 
         let mut i = 0;
         let now = std::time::Instant::now();
@@ -302,23 +328,29 @@ mod test {
             MockClock::set_system_time(Duration::from_secs(candle.time.clone().unwrap().seconds as u64));
             MockClock::advance_system_time(Duration::from_secs(60));
 
+            order_service_mock.write().unwrap().current_price = generate_random_price(&candle);
+
             state.update(&candle)
                 .unwrap_or_else(|err| eprintln!("Error updating last_price_state: {}", err));
 
             hammer_strategy.update().await.expect("Error updating first strategy");
             i += 1;
-            if i > 10000 { // 261933 all
-                break
-            }
+            // println!("i={}", i);
+            // if i > 1000 { // 261933 all
+            //     break;
+            // }
         }
 
         println!("Elapsed test time: {:.10?}", now.elapsed());
+        let new_balance = &order_service_mock.read().unwrap().balance;
         println!("HammerStrategy for
           instruments={:?},
           year={:?}
           start_balance={:?}
-          trash_hold={:?}
-          finished.", instruments.iter().map(|s| s.ticker.clone()).collect::<Vec<_>>(), year, start_balance, trash_hold);
+          trash_hold={:?},
+          balance={:?}
+          profit={:?}
+          finished.", instruments.iter().map(|s| s.ticker.clone()).collect::<Vec<_>>(), year, start_balance, trash_hold, new_balance, new_balance.wr() - start_balance.wr());
 
         assert_eq!(true, false);
     }
